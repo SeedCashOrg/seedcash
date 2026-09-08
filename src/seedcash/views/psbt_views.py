@@ -19,6 +19,19 @@ from seedcash.views.view import (
 from seedcash.gui.screens.psbt_screens import PSBTOverviewScreen
 from seedcash.views.wallet_views import WalletOptionsView
 
+
+def _next_nft_review(parser, category_num):
+    if category_num + 1 < len(parser.nft_categories):
+        return Destination(PSBTNFTView, view_args={"category_num": category_num + 1})
+    return Destination(PSBTFungibleTokenDetailsView, view_args={"category_num": 0})
+
+
+def _next_ft_review(parser, category_num):
+    if category_num + 1 < len(parser.token_categories):
+        return Destination(PSBTFungibleTokenDetailsView, view_args={"category_num": category_num + 1})
+    return Destination(BCHPSBTOverviewView)
+
+
 class LoadingPSBTView(View):
     def __init__(self):
         super().__init__()
@@ -35,9 +48,9 @@ class LoadingPSBTView(View):
             self.loading_screen.stop()
 
     def run(self):
-        if len(self.controller.psbt_parser.inputs[0].items()) > 0:
+        if self.controller.psbt_parser.nft_categories:
             return Destination(PSBTNFTView, skip_current_view=True)
-        elif len(self.controller.psbt_parser.inputs[1].items()) > 0:
+        elif self.controller.psbt_parser.token_categories:
             return Destination(PSBTFungibleTokenDetailsView, skip_current_view=True)
         else:
             return Destination(BCHPSBTOverviewView, skip_current_view=True, view_args={"is_last": True})
@@ -93,15 +106,17 @@ class PSBTFungibleTokenDetailsView(View):
         category: Category = get_category(category_id)
 
         if psbt_parser.ft_burning(category_id):
-            self.run_screen(
+            warning_result = self.run_screen(
                 WarningScreen,
                 title=_("Burning Fungible Token(s)"),
                 status_icon_name=SeedCashIconsConstants.WARNING,
                 status_headline=_("Are you sure?"),
                 text=_("At least one fungible token in the following category has been modified or burned."),
                 button_data=[ButtonOption("Confirm")],
-                selected_color=self.selected_color
+                selected_color=category.icon_color
                 )
+            if warning_result == RET_CODE__BACK_BUTTON:
+                return Destination(BackStackView)
 
         destination_addresses = psbt_parser.token_destination_addresses(category_id)
         spend_amount = psbt_parser.ft_output_amount(category_id)
@@ -140,9 +155,9 @@ class PSBTFungibleTokenDetailsView(View):
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
-        if selected_menu_num == 0:
+        if selected_menu_num == 0 and destination_addresses:
             return Destination(PSBTAddressDetailsView, view_args={"address_num": 0, "destination_addresses": destination_addresses, "category_num": self.category_num})
-        return Destination(BCHPSBTOverviewView)
+        return _next_ft_review(psbt_parser, self.category_num)
 
 # NFT Details View
 class PSBTNFTView(View):
@@ -160,25 +175,32 @@ class PSBTNFTView(View):
         if not self.confirmed:
             warning = self.controller.psbt_parser.get_warning(self.controller.psbt_parser.nft_categories[self.category_num])
             if warning == "minting":
-                self.run_screen(
+                warning_result = self.run_screen(
                     WarningScreen,
                     title=_("Minting NFT(s)"),
                     status_icon_name=SeedCashIconsConstants.WARNING,
                     status_headline=_("Are you sure?"),
                     text=_("Signing would allow transfer, burn, or modify any involved NFT(s)"),
                     button_data=[ButtonOption("Confirm")],
-                    selected_color=self.selected_color
+                    selected_color=GUIConstants.MUSD_BLUE
                 )
+                if warning_result == RET_CODE__BACK_BUTTON:
+                    return Destination(BackStackView)
             elif warning == "burning":
-                self.run_screen(
+                warning_result = self.run_screen(
                     WarningScreen,
                     title=_("Burning NFT(s)"),
                     status_icon_name=SeedCashIconsConstants.WARNING,
                     status_headline=_("Are you sure?"),
                     text=_("At least one NFT in the following category has been modified or burned."),
                     button_data=[ButtonOption("Confirm")],
-                    selected_color=self.selected_color
+                    selected_color=GUIConstants.MUSD_BLUE
                 )
+                if warning_result == RET_CODE__BACK_BUTTON:
+                    return Destination(BackStackView)
+
+        if not psbt_parser.outputs[0].get(psbt_parser.nft_categories[self.category_num]):
+            return _next_nft_review(psbt_parser, self.category_num)
                 
         
         selected_menu_num = self.run_screen(
@@ -250,13 +272,7 @@ class PSBTNFTAddressDetailsView(View):
                 PSBTNFTDetailsView,
                 view_args={"output_num": self.output_num + 1, "category_num": self.category_num},
             )
-        if self.category_num < len(psbt_parser.nft_categories) - 1:
-            return Destination(
-                PSBTNFTDetailsView,
-                view_args={"output_num": 0, "category_num": self.category_num + 1},
-            )
-        
-        return Destination(PSBTFungibleTokenDetailsView, view_args={"category_num": 0})
+        return _next_nft_review(psbt_parser, self.category_num)
 
 class PSBTMathView(View):
     """
@@ -297,10 +313,13 @@ class PSBTAddressDetailsView(View):
     def __init__(self, address_num, destination_addresses=None, category_num=None):
         super().__init__()
         self.address_num = address_num
-        if destination_addresses:
-            self.destination_addresses = destination_addresses
+        parser = self.controller.psbt_parser
+        if category_num is not None:
+            category_id = parser.token_categories[category_num]
+            self.destination_outputs = [out for out in parser.outputs[1].get(category_id, []) if out.address]
         else:
-            self.destination_addresses = self.controller.psbt_parser.destination_addresses
+            self.destination_outputs = [out for out in parser.tx.outputs if out.address]
+        self.destination_addresses = [out.address for out in self.destination_outputs]
 
         self.category_num = category_num
 
@@ -315,12 +334,13 @@ class PSBTAddressDetailsView(View):
 
         # TRANSLATOR_NOTE: Future-tense used to indicate that this transaction will send this amount, as opposed to "Send" on its own which could be misread as an instant command (e.g. "Send Now").
         title = _("Will Send")
-        if psbt_parser.num_destinations > 1:
+        if len(self.destination_outputs) > 1:
             title += f" (#{self.address_num + 1})"
     
         if self.category_num is not None:
-            category: Category = get_category(psbt_parser.output_at_index(self.address_num).token.category_id)
-            amount = psbt_parser.output_at_index(self.address_num).token.ft_amount
+            output = self.destination_outputs[self.address_num]
+            category: Category = get_category(output.token.category_id)
+            amount = output.token.ft_amount
             if amount >= 10e8:
                 self.run_screen(
                     WarningScreen,
@@ -334,7 +354,7 @@ class PSBTAddressDetailsView(View):
             selected_menu_num = self.run_screen(
                 PSBTAddressDetailsScreen,
                 title=title,
-                button_data=[ButtonOption("Next Recipient" if self.address_num < psbt_parser.num_destinations - 1 else "Next")],
+                button_data=[ButtonOption("Next Recipient" if self.address_num < len(self.destination_outputs) - 1 else "Next")],
                 selected_color=category.icon_color,
                 address=self.destination_addresses[self.address_num],
                 amount=amount,
@@ -344,9 +364,9 @@ class PSBTAddressDetailsView(View):
             selected_menu_num = self.run_screen(
                 PSBTAddressDetailsScreen,
                 title=title,
-                button_data=[ButtonOption("Next Recipient" if self.address_num < psbt_parser.num_destinations - 1 else "Next")],
+                button_data=[ButtonOption("Next Recipient" if self.address_num < len(self.destination_outputs) - 1 else "Next")],
                 address=self.destination_addresses[self.address_num],
-                amount=psbt_parser.output_at_index(self.address_num).value_satoshis,
+                amount=self.destination_outputs[self.address_num].value_satoshis,
             )
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:
@@ -358,14 +378,11 @@ class PSBTAddressDetailsView(View):
                 PSBTAddressDetailsView, view_args={"address_num": self.address_num + 1, "destination_addresses": self.destination_addresses, "category_num": self.category_num}
             )
         
+        elif self.category_num is not None:
+            return _next_ft_review(psbt_parser, self.category_num)
+
         elif psbt_parser.op_return_data:
             return Destination(PSBTOpReturnView)
-
-        elif self.category_num is not None:
-            if self.category_num < len(psbt_parser.token_categories) - 1:
-                return Destination(PSBTFungibleTokenDetailsView, view_args={"category_num": self.category_num + 1})
-            else:
-                return Destination(BCHPSBTOverviewView)
 
         return Destination(PSBTConfirmationView)
             

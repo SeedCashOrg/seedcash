@@ -1,5 +1,6 @@
 import logging
 import struct
+from collections import Counter
 from enum import Enum
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
@@ -61,7 +62,6 @@ class Transaction:
     input_maps: List[List[Tuple[bytes, bytes]]] = field(default_factory=list)
     output_maps: List[List[Tuple[bytes, bytes]]] = field(default_factory=list)
     raw_unsigned_tx: bytes = field(repr=False, default=b"")
-    categories: Dict[str, List[str]] = field(default_factory=lambda: {"nft": [], "ft": []})  # [nft_categories, ft_categories]
 
     # ---- Total BCH (including token carriers) ----
     @property
@@ -87,13 +87,11 @@ class Transaction:
                 if inp.spent_output.token.nft_data is not None:
                     category = inp.spent_output.token.category_id
                     if category not in nft_dict:
-                        self.categories["nft"].append(category)
                         nft_dict[category] = []
                     nft_dict[category].append(inp)
-                elif inp.spent_output.token.ft_amount is not None:
+                if inp.spent_output.token.ft_amount is not None:
                     category = inp.spent_output.token.category_id
                     if category not in ft_dict:
-                        self.categories["ft"].append(category)
                         ft_dict[category] = []
                     ft_dict[category].append(inp)
             else:
@@ -115,7 +113,7 @@ class Transaction:
                     if category not in nft_dict:
                         nft_dict[category] = []
                     nft_dict[category].append(out)
-                elif out.token.ft_amount is not None:
+                if out.token.ft_amount is not None:
                     category = out.token.category_id
                     if category not in ft_dict:
                         ft_dict[category] = []
@@ -127,9 +125,6 @@ class Transaction:
 
         return [nft_dict, ft_dict, st_dict]
     
-    def categories_type(self, type_name: str) -> List[str]:
-        return self.categories.get(type_name, [])
-
 def read_varint(buf: bytes, pos: int) -> Tuple[int, int]:
     """Read a Bitcoin-style varint (CompactSize uint) at ``pos``."""
     if pos >= len(buf):
@@ -394,16 +389,16 @@ class PSBTParser:
     
     @property
     def token_categories(self) -> List[str]:
-        return sorted(self.tx.categories_type("ft")) if self.tx else []
+        return sorted(set(self.inputs[1]) | set(self.outputs[1]))
 
     def ft_burning(self, category_id: str) -> bool:
-        input_count = len(self.inputs[1].get(category_id, []))
-        output_count = len(self.outputs[1].get(category_id, []))
-        return input_count > 0 and output_count < input_count
+        input_amount = sum(inp.spent_output.token.ft_amount or 0
+                           for inp in self.inputs[1].get(category_id, []))
+        return input_amount > self.ft_output_amount(category_id)
 
     @property
     def nft_categories(self) -> List[str]:
-        return sorted(self.tx.categories_type("nft")) if self.tx else []
+        return sorted(set(self.inputs[0]) | set(self.outputs[0]))
     
     @property
     def input_amount(self) -> int:
@@ -429,12 +424,12 @@ class PSBTParser:
     def outputs(self) -> List[Dict[str, TxOutput]]:
         return self._outputs
 
-    def ft_output_amount(self, category_id: str) -> Optional[int]:
+    def ft_output_amount(self, category_id: str) -> int:
         total_ft_amount = 0
         for out in self.outputs[1].get(category_id, []):
             if out.token and out.token.ft_amount is not None:
                 total_ft_amount += out.token.ft_amount
-        return total_ft_amount if total_ft_amount > 0 else None
+        return total_ft_amount
 
     @property
     def destination_addresses(self) -> List[str]:
@@ -459,31 +454,33 @@ class PSBTParser:
             return self.tx.outputs[index]
         return None
 
-    def get_warning(self, category_id: str) -> Optional[NFTWarning]:
+    def get_warning(self, category_id: str) -> Optional[str]:
         for out in self.outputs[0].get(category_id, []):
             if out.token.nft_data.capability == "minting":
                 return NFTWarning.MINTING.value
             
         if len(self.inputs[0].get(category_id, [])) < len(self.outputs[0].get(category_id, [])):
-            return NFTWarning.BURNING.value
+            return NFTWarning.MINTING.value
 
-        if len(self.inputs[0].get(category_id, [])) == len(self.outputs[0].get(category_id, [])):
-            for i in range(len(self.inputs[0].get(category_id, []))):
-                if ((self.inputs[0].get(category_id, [])[i].spent_output.token.nft_data.capability != self.outputs[0].get(category_id, [])[i].token.nft_data.capability) 
-                    or self.inputs[0].get(category_id, [])[i].spent_output.token.nft_data.commitment != self.outputs[0].get(category_id, [])[i].token.nft_data.commitment):
-                    return NFTWarning.BURNING.value
+        input_nfts = Counter((inp.spent_output.token.nft_data.capability,
+                              inp.spent_output.token.nft_data.commitment)
+                             for inp in self.inputs[0].get(category_id, []))
+        output_nfts = Counter((out.token.nft_data.capability, out.token.nft_data.commitment)
+                              for out in self.outputs[0].get(category_id, []))
+        if input_nfts != output_nfts:
+            return NFTWarning.BURNING.value
         return None
 
     @staticmethod
     def address_from_script(script_pubkey: bytes, is_token_tx: bool = False) -> Optional[str]:
-        if script_pubkey.startswith(b"\x76\xa9\x14") and script_pubkey.endswith(b"\x88\xac"):
+        if len(script_pubkey) == 25 and script_pubkey.startswith(b"\x76\xa9\x14") and script_pubkey.endswith(b"\x88\xac"):
             hash160 = script_pubkey[3:23]
-            version_byte = 0x00 if not is_token_tx else 0x08    
+            version_byte = 0x00 if not is_token_tx else 0x10
             return Bip44.hash160_to_cashaddr(hash160, version_byte=version_byte).strip()
 
-        if script_pubkey.startswith(b"\xa9\x14") and script_pubkey.endswith(b"\x87"):
+        if len(script_pubkey) == 23 and script_pubkey.startswith(b"\xa9\x14") and script_pubkey.endswith(b"\x87"):
             hash160 = script_pubkey[2:22]
-            version_byte = 0x05 if not is_token_tx else 0x09
+            version_byte = 0x08 if not is_token_tx else 0x18
             return Bip44.hash160_to_cashaddr(hash160, version_byte=version_byte).strip()
         return None
     
