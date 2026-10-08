@@ -167,23 +167,26 @@ class Controller(Singleton):
     @property
     def storage(self):
         while not self._storage:
-            # Wait for the BackgroundImportThread to finish initializing the storage.
-            # This is a rare timing issue that likely only occurs in the test suite.
             time.sleep(0.001)
         return self._storage
 
-    def get_seed(self) -> Seed:
-        if self.storage:
-            return self.storage._seed
-
     def discard_wallet(self):
         self.storage.discard_wallet()
+        self.clear_back_stack()
+        self.discard_psbt()
+        if self.screensaver is not None:
+            self.screensaver.last_screen = None
         import gc
         gc.collect()
 
     def discard_psbt(self):
+        if isinstance(self.psbt_bytes, bytearray):
+            self.psbt_bytes[:] = b"\x00" * len(self.psbt_bytes)
         self.psbt_bytes = b""
         self.psbt_parser = None
+        self.token_review = None
+        self.token_review_parser = None
+        self.token_review_acknowledged = set()
 
     def pop_prev_from_back_stack(self):
         if len(self.back_stack) > 0:
@@ -255,8 +258,7 @@ class Controller(Singleton):
                     self.clear_back_stack()
 
                     # TODO: IMPORTANT Home always wipes the back_stack/state of temp vars
-                    self.psbt_bytes = b""
-                    self.psbt_parser = None
+                    self.discard_psbt()
 
                 logger.info(f"\nback_stack: {self.back_stack}")
 
@@ -409,21 +411,10 @@ class Controller(Singleton):
 
     def handle_exception(self, e) -> Destination:
         """
-        Displays a user-friendly error screen and includes debugging info to help
-        devs diagnose what went wrong.
-
-        Shows:
-            * Exception type
-            * python file, line num, method name
-            * Exception message
+        Display a controlled error without exception text or traceback secrets.
         """
         from seedcash.views.view import UnhandledExceptionView
 
-        logger.exception(e)
-
-        # The final exception output line is:
-        # "foo.bar.ExceptionType: The exception message"
-        # So we extract the Exception type and trim off any "foo.bar." namespacing:
         last_line = traceback.format_exc().splitlines()[-1]
         exception_type = last_line.split(":")[0].split(".")[-1]
 
@@ -448,6 +439,7 @@ class Controller(Singleton):
             line_info,
             exception_msg,
         ]
+        
         return Destination(
             UnhandledExceptionView, view_args={"error": error}, clear_history=True
         )
