@@ -30,7 +30,7 @@ class SeedSlipEntryView(View):
 
     def __init__(self):
         super().__init__()
-        self.num_words = self.controller.storage.mnemonic_length
+        self.max_bits = 128 if self.controller.storage.mnemonic_length == 20 else 256
 
     def run(self):
         """
@@ -38,7 +38,7 @@ class SeedSlipEntryView(View):
         """
         from seedcash.gui.screens.slip_screens import SlipEntryScreen
 
-        ret = self.run_screen(SlipEntryScreen, num_words=self.num_words)
+        ret = self.run_screen(SlipEntryScreen, max_bits=self.max_bits)
 
         if ret == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
