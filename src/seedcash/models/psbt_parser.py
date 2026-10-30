@@ -202,6 +202,47 @@ class Category:
                 break
         return has_minting
 
+    @property
+    def is_nft_modified(self) -> bool:
+        """Whether a mutable or minting input NFT leaves with a changed commitment."""
+        input_nfts = [
+            tx_in.spent_output.token.nft_data
+            for tx_in in self.inputs
+            if tx_in.spent_output and tx_in.spent_output.token
+            and tx_in.spent_output.token.nft_data
+        ]
+        output_nfts = [
+            tx_out.token.nft_data for tx_out in self.outputs
+            if tx_out.token and tx_out.token.nft_data
+        ]
+        unmatched_outputs = list(output_nfts)
+        unmatched_mutable_inputs = []
+        # Preserve unchanged commitments first so another NFT cannot hide a change.
+        for nft in input_nfts:
+            for index, output_nft in enumerate(unmatched_outputs):
+                if (nft.capability, nft.commitment) == (output_nft.capability, output_nft.commitment):
+                    unmatched_outputs.pop(index)
+                    break
+            else:
+                if nft.capability in ("mutable", "minting"):
+                    unmatched_mutable_inputs.append(nft)
+        # A capability downgrade can preserve the same NFT without changing its
+        # commitment; consume those outputs before identifying changed commitments.
+        for input_nft in unmatched_mutable_inputs[:]:
+            same_commitment = next(
+                (i for i, output_nft in enumerate(unmatched_outputs)
+                 if output_nft.commitment == input_nft.commitment),
+                None,
+            )
+            if same_commitment is not None:
+                unmatched_outputs.pop(same_commitment)
+                unmatched_mutable_inputs.remove(input_nft)
+        return any(
+            input_nft.commitment != output_nft.commitment
+            for input_nft in unmatched_mutable_inputs
+            for output_nft in unmatched_outputs
+        )
+
 
     
 @dataclass
@@ -689,35 +730,27 @@ class PSBTParser:
 
         for category in self.token_review.nft_categories:
             # NFT categories contain only inputs/outputs with NFT data.
-            # Check counts first without allocating intermediate lists.
-            if len(category.outputs) < len(category.inputs):
-                raise ValueError("PSBT burns non-fungible tokens")
-            if not category.inputs:
-                continue
-
-            has_minting = any(
-                item.spent_output.token.nft_data.capability == "minting"
-                for item in category.inputs
-            ) or any(
-                item.token.nft_data.capability == "minting"
-                for item in category.outputs
-            )
-            if not has_minting:
-                continue
-
-            # Minted replacements can hide a loss in the total NFT count.
-            # Match each input's capability and commitment, including duplicates.
-            output_nfts = {}
-            for item in category.outputs:
-                nft = item.token.nft_data
-                key = (nft.capability, nft.commitment)
-                output_nfts[key] = output_nfts.get(key, 0) + 1
-            for item in category.inputs:
-                nft = item.spent_output.token.nft_data
-                key = (nft.capability, nft.commitment)
-                if output_nfts.get(key, 0) == 0:
+            # Match exact transfers first. Mutable and minting inputs may account
+            # for an output with a different commitment; an unmatched immutable
+            # input is burned, even if another NFT exists in the outputs.
+            output_nfts = [item.token.nft_data for item in category.outputs]
+            input_nfts = [item.spent_output.token.nft_data for item in category.inputs]
+            unmatched_inputs = []
+            for nft in input_nfts:
+                match = next((i for i, out in enumerate(output_nfts)
+                              if (out.capability, out.commitment) ==
+                              (nft.capability, nft.commitment)), None)
+                if match is not None:
+                    output_nfts.pop(match)
+                else:
+                    unmatched_inputs.append(nft)
+            for nft in unmatched_inputs:
+                if nft.capability in ("mutable", "minting") and output_nfts:
+                    # A capability may be downgraded while transferring the NFT;
+                    # commitment changes are also permitted for mutable/minting inputs.
+                    output_nfts.pop(0)
+                else:
                     raise ValueError("PSBT burns non-fungible tokens")
-                output_nfts[key] -= 1
 
     # BCH View
     @property

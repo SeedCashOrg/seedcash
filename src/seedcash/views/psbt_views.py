@@ -40,6 +40,8 @@ class PSBTTokenView(View):
             return PSBTFungibleTokenDetailsView
         if self.category.is_nft_minted:
             return PSBTMintingNFTWarningView
+        if self.category.is_nft_modified:
+            return PSBTModifiedNFTWarningView
         return PSBTTokenDetailsView
 
     def next_category(self):
@@ -117,9 +119,9 @@ class PSBTFTUnknownWarningView(PSBTTokenView):
             WarningScreen,
             title=_("Unknown FT token ID"),
             show_back_button=True,
-            status_headline=_(""),
+            status_headline=_("Unknown token ID"),
             status_icon_name=SeedCashIconsConstants.WARNING,
-            text=_(f"Unknown token ID, No decimal conversion applied."),
+            text=_(f"No decimal conversion applied."),
             button_data=[ButtonOption("Confirm")],
             selected_color=get_category(self.category.category_id).icon_color
         )
@@ -243,6 +245,26 @@ class PSBTMintingNFTWarningView(PSBTTokenView):
 
         if result == RET_CODE__BACK_BUTTON:
             return self.back()
+        if self.category.is_nft_modified:
+            return Destination(PSBTModifiedNFTWarningView)
+        return Destination(PSBTTokenDetailsView)
+
+
+class PSBTModifiedNFTWarningView(PSBTTokenView):
+    def run(self):
+        result = self.run_screen(
+            WarningScreen,
+            title=_("Modifying NFT(s)"),
+            show_back_button=True,
+            status_icon_name=SeedCashIconsConstants.WARNING,
+            status_headline=_("Commitment Modified"),
+            text=_("At least one NFT's commitment in the following category has been modified"),
+            button_data=[ButtonOption("Confirm")],
+            selected_color=GUIConstants.MUSD_BLUE,
+        )
+
+        if result == RET_CODE__BACK_BUTTON:
+            return self.back()
         return Destination(PSBTTokenDetailsView)
 
 
@@ -284,8 +306,8 @@ class PSBTNFTDetailsView(PSBTTokenView):
             button_data=[ButtonOption("Next")],
             selected_color=GUIConstants.MUSD_BLUE,
             output_num=self.category.nft_detail_no + 1,
-            nft_commitment=self.category.nft_commitment,
             nft_capability=self.category.nft_capability,
+            nft_commitment=self.category.nft_commitment,
         )
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:
