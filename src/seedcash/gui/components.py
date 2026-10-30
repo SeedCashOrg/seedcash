@@ -838,6 +838,99 @@ class RoundedTextArea(BaseComponent):
                 fill=self.font_color,
                 anchor="ls",
             )
+
+
+@dataclass
+class ScrollableRoundedTextArea(RoundedTextArea):
+    """Rounded text area that clips overflowing text and shows its scroll position."""
+
+    scrollbar_color: str = GUIConstants.ACCENT_COLOR
+
+    def scroll_by(self, delta_y: int) -> bool:
+        """Scroll by a pixel delta, clamped to the text's available range."""
+        new_scroll_y = min(
+            self.scrollbar_max_y,
+            max(0, self.scroll_y + delta_y),
+        )
+        if new_scroll_y == self.scroll_y:
+            return False
+        self.scroll_y = new_scroll_y
+        return True
+
+    @property
+    def scroll_step(self) -> int:
+        """Vertical advance of one rendered line at this field's font size."""
+        return self.text_height_above_baseline + self.line_spacing
+
+    def render(self):
+        # Keep the background and text layout from RoundedTextArea, but render
+        # the text to a field-sized layer so scrolled lines stay inside it.
+        self.image_draw.rounded_rectangle(
+            (
+                self.screen_x,
+                self.screen_y - self.edge_padding // 2,
+                self.screen_x + self.width + self.edge_padding,
+                self.screen_y + self.height,
+            ),
+            radius=self.corner_radius,
+            outline=self.border_color,
+            width=self.border_width,
+            fill=self.fill_color,
+        )
+
+        field_width = max(1, self.width + self.edge_padding)
+        field_height = max(1, self.height + self.edge_padding // 4)
+        text_layer = Image.new("RGBA", (field_width, field_height), (0, 0, 0, 0))
+        text_draw = ImageDraw.Draw(text_layer)
+        font = Fonts.get_font(self.font_name, self.font_size)
+        for i, line_dict in enumerate(self.text_lines):
+            line_text = line_dict["text"]
+            if not line_text:
+                continue
+            line_width = line_dict["text_width"]
+            x = (self.width - line_width) // 2 if self.is_text_centered else self.edge_padding
+            y = self.edge_padding // 4 + self.line_positions[i] - self.scroll_y
+            text_draw.text((x, y), line_text, font=font, fill=self.font_color, anchor="ls")
+        self.canvas.alpha_composite(
+            text_layer,
+            (self.screen_x, self.screen_y - self.edge_padding // 4),
+        )
+
+        if self.scrollbar_max_y > 0:
+            track_left = self.screen_x + self.width + self.edge_padding - 4
+            track_top = self.screen_y + 6
+            track_bottom = self.screen_y + self.height - 6
+            track_height = max(1, track_bottom - track_top)
+            thumb_height = max(
+                10,
+                int(track_height * self.height / (self.height + self.scrollbar_max_y)),
+            )
+            thumb_range = max(0, track_height - thumb_height)
+            scroll_y = min(max(0, self.scroll_y), self.scrollbar_max_y)
+            thumb_y = track_top + int(thumb_range * scroll_y / self.scrollbar_max_y)
+            self.image_draw.rounded_rectangle(
+                (track_left, thumb_y, track_left + 2, thumb_y + thumb_height),
+                radius=1,
+                fill=self.scrollbar_color,
+            )
+
+    @property
+    def scrollbar_max_y(self) -> int:
+        # A single line cannot scroll vertically, even if padding makes the
+        # raw content-height calculation appear slightly taller than the field.
+        if self.height is None or len(self.text_lines) <= 1:
+            return 0
+        content_height = (
+            len(self.text_lines) * self.text_height_above_baseline
+            + self.line_spacing * max(0, len(self.text_lines) - 1)
+            + self.text_height_below_baseline
+        )
+        # The text layer is clipped to the component height. Padding affects
+        # glyph placement, but it must not extend the scroll range past the
+        # final rendered line.
+        return max(0, content_height - self.height)
+
+
 @dataclass
 class ScrollableTextLine(TextArea):
     """

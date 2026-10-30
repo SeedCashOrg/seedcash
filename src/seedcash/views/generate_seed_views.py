@@ -54,9 +54,7 @@ class SeedCashGenerateSeedView(View):
                 SeedCashChooseWordsView, view_args=dict(is_calc_final_word=True, is_slip39=self.is_slip39)
             )
         elif button_data[selected_menu_num] == self.RANDOM_SEED:
-            return Destination(
-                SeedCashChooseWordsView, view_args=dict(is_random_seed=True, is_slip39=self.is_slip39)
-            )
+            return
 
         return Destination(BackStackView)
 

@@ -281,6 +281,32 @@ class TestAuditSc01Sc05:
             assert parse_token_script(nft) is not None
             assert parse_token_script(ft) is not None
 
+        @pytest.mark.parametrize('commitment_size', [40, 41])
+        def test_nft_commitment_consensus_length_in_transaction(self, commitment_size):
+            prefix = b'\xef' + bytes(32) + b'`' + bytes([commitment_size]) + bytes(commitment_size)
+            script = prefix + parser_signing_security_P2PKH
+            tx = audit_integration_build_tx([(546, script)])
+            if commitment_size == 40:
+                parsed = parse_transaction(tx)
+                assert len(parsed.outputs[0].token.nft_data.commitment) == 80
+            else:
+                with pytest.raises(ValueError, match='invalid token prefix'):
+                    parse_transaction(tx)
+
+        @pytest.mark.parametrize('commitment_size', [40, 41])
+        def test_nft_commitment_consensus_length_in_psbt_output_metadata(self, commitment_size):
+            globals_145 = (parser_signing_security_kv(b'\xfb', (145).to_bytes(4, 'little'))
+                           + parser_signing_security_kv(b'\x04', b'\x01')
+                           + parser_signing_security_kv(b'\x05', b'\x01'))
+            token_prefix = b'\xef' + bytes(32) + b'`' + bytes([commitment_size]) + bytes(commitment_size)
+            output_field = parser_signing_security_kv(b'6', token_prefix + parser_signing_security_P2PKH)
+            psbt = parser_signing_security_psbt(global_extra=globals_145, output_map=output_field)
+            if commitment_size == 40:
+                assert parse_psbt(psbt)['output_count'] == 1
+            else:
+                with pytest.raises(ValueError, match='invalid token prefix'):
+                    parse_psbt(psbt)
+
         def test_plain_script_not_token(self):
             assert parse_token_script(b'v\xa9\x14' + bytes(20) + b'\x88\xac') is None
 parser_signing_security_P2PKH = b'v\xa9\x14' + bytes(20) + b'\x88\xac'

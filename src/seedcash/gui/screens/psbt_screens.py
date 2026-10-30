@@ -16,17 +16,20 @@ from seedcash.gui.components import (
     SeedCashIconsConstants,
     TextArea,
     RoundedTextArea,
+    ScrollableRoundedTextArea,
     calc_bezier_curve,
     linear_interp,
     load_image,
 )
 from seedcash.gui.renderer import Renderer
 from seedcash.models.threads import BaseThread
+from seedcash.hardware.buttons import HardwareButtonsConstants
 
 from .screen import (
     ButtonOption,
     SeedCashButtonListWithNav,
-    BaseTopNavScreen,
+    RET_CODE__BACK_BUTTON,
+    RET_CODE__CHECK_BUTTON,
 )
 
 
@@ -121,8 +124,11 @@ class PSBTOverviewScreen(SeedCashButtonListWithNav):
 
         # First calculate how wide the inputs col will be
         inputs_column = []
-        if self.input_count == 1:
-            inputs_column.append(_("1 input" if self.inputs_amount > 0 else "Genesis"))
+
+        if self.input_count == 0:
+            inputs_column.append(_("Genesis"))
+        elif self.input_count == 1:
+            inputs_column.append(_("1 input"))
         elif self.input_count > 5:
             inputs_column.append(_("input 1"))
             inputs_column.append(_("input 2"))
@@ -569,18 +575,12 @@ class PSBTNFTScreen(SeedCashButtonListWithNav):
 
 @dataclass
 class PSBTNFTDetailsScreen(SeedCashButtonListWithNav):
-    """
-    Same constructor signature (output_num, nft_capability, nft_commitment).
-    A static card between the top nav and the Next button. Its background
-    image depends on the NFT type (gold for minting, graphite for none,
-    mutable and anything else), with the heading, Type and Commitment drawn
-    on top.
-    """
+    """Show NFT details and allow long commitments to be scrolled."""
 
-    # NFT type to card background theme. Any other type uses graphite.
     NFT_CARD_THEMES = {"minting": "gold"}
     NFT_CARD_DEFAULT_THEME = "graphite"
     NFT_CARD_FALLBACK_COLOR = (38, 38, 48)
+    COMMITMENT_VIEWPORT_MIN_HEIGHT = GUIConstants.BUTTON_HEIGHT
 
     output_num: int = None
     nft_capability: str = None
@@ -591,30 +591,27 @@ class PSBTNFTDetailsScreen(SeedCashButtonListWithNav):
         self.is_bottom_list = True
         self.is_button_text_centered = True
         self.button_data = [ButtonOption(_("Next"))]
+        self.commitment_scroll_y = 0
+        self.commitment_max_scroll_y = 0
+        self.commitment_scroll_step = 1
 
-        super().__post_init__()      # builds top nav, the Next button, paste_images
+        super().__post_init__()
 
-        # The card fills the space between the top nav and the Next button
         self.card_x = GUIConstants.EDGE_PADDING
         self.card_y = self.top_nav.height
         self.card_width = self.canvas_width - 2 * GUIConstants.EDGE_PADDING
         self.card_height = (
             self.buttons[0].screen_y - self.card_y - GUIConstants.COMPONENT_PADDING
         )
-
-        card = self._load_card_background()
-        self._draw_card_text(card)
-        self.paste_images.append((card.convert("RGB"), (self.card_x, self.card_y)))
+        self._refresh_card()
 
     def _load_card_background(self) -> Image.Image:
-        """Background PNG for this NFT type. The file name carries the card
-        size, so it must match the generated files."""
-        theme = self.NFT_CARD_THEMES.get(str(self.nft_capability).lower(), self.NFT_CARD_DEFAULT_THEME)
-        name = f"nft_card_{theme}.png"
+        theme = self.NFT_CARD_THEMES.get(
+            str(self.nft_capability).lower(), self.NFT_CARD_DEFAULT_THEME
+        )
         try:
-            return load_image(name, "img").convert("RGBA")
+            return load_image(f"nft_card_{theme}.png", "img").convert("RGBA")
         except Exception:
-            # Missing file or wrong card size: plain rounded card instead
             card = Image.new("RGBA", (self.card_width, self.card_height), (0, 0, 0, 255))
             ImageDraw.Draw(card).rounded_rectangle(
                 (0, 0, self.card_width - 1, self.card_height - 1),
@@ -623,62 +620,185 @@ class PSBTNFTDetailsScreen(SeedCashButtonListWithNav):
             )
             return card
 
+    def _refresh_card(self):
+        card = self._load_card_background()
+        self._draw_card_text(card)
+        self.card_image = card.convert("RGB")
+        # Replace our previous card image when scrolling, rather than stacking copies.
+        self.paste_images = [
+            (img, coords) for img, coords in self.paste_images
+            if coords != (self.card_x, self.card_y)
+        ]
+        self.paste_images.append((self.card_image, (self.card_x, self.card_y)))
+
     def _draw_card_text(self, card: Image.Image):
-        """Draw the heading and the label / value pairs onto the card.
-        Text goes on a transparent layer first, so the background pixels
-        under it are never overwritten."""
         layer = Image.new("RGBA", card.size, (0, 0, 0, 0))
-        layer_draw = ImageDraw.Draw(layer)
+        draw = ImageDraw.Draw(layer)
+        inset = GUIConstants.COMPONENT_PADDING
+        text_width = card.width - 2 * inset
+        gap = (3 * GUIConstants.COMPONENT_PADDING) // 2
 
-        text_width = card.width - 2 * GUIConstants.COMPONENT_PADDING
-
-        def text(value, size, centered=False, rounded=False):
-            if rounded:
-                return RoundedTextArea(
-                    image_draw=layer_draw,
-                    canvas=layer,
-                    width=text_width,
-                    treat_chars_as_words=True,
-                    text=value,
-                    font_size=size,
-                    font_color=GUIConstants.BODY_FONT_COLOR,
-                    is_text_centered=centered,
-                )
+        def plain(value, size):
             return TextArea(
-                image_draw=layer_draw,
+                image_draw=draw,
                 canvas=layer,
-                text=value,
+                text=str(value or ""),
                 width=text_width,
                 edge_padding=0,
                 font_size=size,
                 font_color=GUIConstants.BODY_FONT_COLOR,
-                is_text_centered=centered,
+                is_text_centered=False,
                 background_color=GUIConstants.TRANSPARENT_COLOR,
             )
 
-        gap = (3 * GUIConstants.COMPONENT_PADDING)//2
-        rows = [
-            (text(f"NFT #{self.output_num}", GUIConstants.TOP_NAV_TITLE_FONT_SIZE), gap),
-            (text(_("Type"), GUIConstants.BODY_FONT_SIZE - 4), gap//2),
-            (text(self.nft_capability, GUIConstants.BODY_FONT_SIZE - 2, rounded=True), gap),
-        ]
-
-        # nft_commitment is an empty string when there is nothing to show;
-        # keep that section out of the card entirely in that case.
-        if self.nft_commitment != "":
-            rows += [
-                (text(_("Commitment"), GUIConstants.BODY_FONT_SIZE - 4), gap//2),
-                (text(self.nft_commitment, GUIConstants.BODY_FONT_SIZE - 2, rounded=True), 0, ),
-            ]
-
         y = 2 * GUIConstants.COMPONENT_PADDING
-        for component, gap_after in rows:
-            component.screen_x = gap
+        for component, after in (
+            (plain(f"NFT #{self.output_num}", GUIConstants.TOP_NAV_TITLE_FONT_SIZE), gap),
+            (plain(_("Type"), GUIConstants.BODY_FONT_SIZE - 4), gap // 2),
+        ):
+            component.screen_x = inset
             component.screen_y = y
             component.render()
-            y += component.height + gap_after
+            y += component.height + after
+
+        capability = RoundedTextArea(
+            image_draw=draw,
+            canvas=layer,
+            width=text_width,
+            treat_chars_as_words=True,
+            text=str(self.nft_capability or ""),
+            font_size=GUIConstants.BODY_FONT_SIZE - 2,
+            font_color=GUIConstants.BODY_FONT_COLOR,
+        )
+        capability.screen_x = inset
+        capability.screen_y = y
+        capability.render()
+        y += capability.height + gap
+
+        # reflow_text_for_width preserves a final empty line after a trailing
+        # newline. NFT commitments are shown as one continuous value, so trim
+        # only trailing line separators before wrapping it.
+        commitment = str(self.nft_commitment or "").rstrip("\r\n")
+        self.commitment_max_scroll_y = 0
+        self.commitment_field = None
+        if commitment:
+            label = plain(_("Commitment"), GUIConstants.BODY_FONT_SIZE - 4)
+            label.screen_x = inset
+            label.screen_y = y
+            label.render()
+            y += label.height + gap // 2
+
+            viewport_height = GUIConstants.BODY_FONT_SIZE
+            field = ScrollableRoundedTextArea(
+                image_draw=draw,
+                canvas=layer,
+                width=text_width - 6,
+                height=viewport_height,
+                screen_x=inset,
+                screen_y=y,
+                edge_padding=6,
+                treat_chars_as_words=True,
+                text=commitment,
+                font_size=GUIConstants.BODY_FONT_SIZE - 2,
+                font_color=GUIConstants.BODY_FONT_COLOR,
+                scrollbar_color=GUIConstants.BODY_FONT_COLOR,
+                is_text_centered=False,
+            )
+            field.scroll_y = self.commitment_scroll_y
+            field.scroll_by(0)  # Clamp the retained position if the text or viewport changed.
+            self.commitment_max_scroll_y = field.scrollbar_max_y
+            self.commitment_scroll_y = field.scroll_y
+            self.commitment_scroll_step = field.scroll_step
+            self.commitment_field = field
+            field.render()
 
         card.alpha_composite(layer)
+
+    def _run(self):
+        """Use KEY1 and KEY3 to scroll the commitment field."""
+        while True:
+            ret = self._run_callback()
+            if ret is not None:
+                return ret
+            user_input = self.hw_inputs.wait_for(
+                [
+                    HardwareButtonsConstants.KEY_UP,
+                    HardwareButtonsConstants.KEY_DOWN,
+                    HardwareButtonsConstants.KEY1,
+                    HardwareButtonsConstants.KEY3,
+                    HardwareButtonsConstants.KEY_LEFT,
+                    HardwareButtonsConstants.KEY_RIGHT,
+                ] + HardwareButtonsConstants.KEYS__ANYCLICK
+            )
+
+            with self.renderer.lock:
+                if user_input in (
+                    HardwareButtonsConstants.KEY1,
+                    HardwareButtonsConstants.KEY3,
+                ):
+                    # Consume both keys even at the scroll limits so they cannot
+                    # fall through to KEYS__ANYCLICK and activate the selection.
+                    if self.commitment_field:
+                        delta = (
+                            self.commitment_scroll_step
+                            if user_input == HardwareButtonsConstants.KEY3
+                            else -self.commitment_scroll_step
+                        )
+                        if self.commitment_field.scroll_by(delta):
+                            self.commitment_scroll_y = self.commitment_field.scroll_y
+                            self._refresh_card()
+                            self._render()
+                elif user_input == HardwareButtonsConstants.KEY_UP:
+                    if self.top_nav.is_selected:
+                        pass
+                    elif self.selected_button == 0:
+                        if self.top_nav.show_back_button or self.top_nav.show_check_button:
+                            self.buttons[self.selected_button].is_selected = False
+                            self.buttons[self.selected_button].render()
+                            self.top_nav.is_selected = True
+                            self.top_nav.render_buttons()
+                    else:
+                        cur_button = self.buttons[self.selected_button]
+                        self.selected_button -= 1
+                        next_button = self.buttons[self.selected_button]
+                        cur_button.is_selected = False
+                        next_button.is_selected = True
+                        cur_button.render()
+                        next_button.render()
+                elif user_input == HardwareButtonsConstants.KEY_DOWN:
+                    if self.top_nav.is_selected:
+                        self.top_nav.is_selected = False
+                        self.top_nav.render_buttons()
+                        self.buttons[self.selected_button].is_selected = True
+                        self.buttons[self.selected_button].render()
+                    elif self.selected_button < len(self.buttons) - 1:
+                        cur_button = self.buttons[self.selected_button]
+                        self.selected_button += 1
+                        next_button = self.buttons[self.selected_button]
+                        cur_button.is_selected = False
+                        next_button.is_selected = True
+                        cur_button.render()
+                        next_button.render()
+                elif user_input == HardwareButtonsConstants.KEY_LEFT:
+                    if self.top_nav.show_back_button or self.top_nav.show_check_button:
+                        self.buttons[0].is_selected = False
+                        self.buttons[0].render()
+                        self.top_nav.is_selected = True
+                        self.top_nav.render_buttons()
+                elif user_input == HardwareButtonsConstants.KEY_RIGHT and self.top_nav.is_selected:
+                    self.top_nav.is_selected = False
+                    self.top_nav.render_buttons()
+                    self.buttons[0].is_selected = True
+                    self.buttons[0].render()
+                elif user_input in HardwareButtonsConstants.KEYS__ANYCLICK:
+                    if self.top_nav.is_selected:
+                        if self.top_nav.show_check_button and self.top_nav.right_button.is_selected:
+                            return RET_CODE__CHECK_BUTTON
+                        if self.top_nav.show_back_button and self.top_nav.left_button.is_selected:
+                            return RET_CODE__BACK_BUTTON
+                    return self.selected_button
+
+                self.renderer.show_image()
 
 @dataclass
 class PSBTNFTAddressScreen(SeedCashButtonListWithNav):
@@ -983,7 +1103,7 @@ class PSBTCardTextScreen(SeedCashButtonListWithNav):
                 screen_y=content_y,
                 width=self.canvas_width - 2 * GUIConstants.EDGE_PADDING,
                 height=card_height,
-                fill_color=GUIConstants.INACTIVE_COLOR,
+                fill_color=GUIConstants.TRANSPARENT_COLOR,
                 is_text_centered=True,
                 treat_chars_as_words=True,
             )

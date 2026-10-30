@@ -159,6 +159,31 @@ def test_nft_minting_warning(ui):
     assert ui.calls[-1][1]['category_id'] == '11' * 32
 
 
+@pytest.mark.parametrize('capability', ['mutable', 'minting'])
+def test_nft_commitment_change_routes_through_warning(ui, capability):
+    cat = Category('11' * 32)
+    spent = TxOutput(546, token=Token(b'', b'', cat.category_id,
+                                      nft_data=Token.NFTData(capability, 'before')))
+    changed = TxOutput(546, token=Token(b'', b'', cat.category_id,
+                                        nft_data=Token.NFTData(capability, 'after')))
+    cat.inputs = [TxInput(bytes(32), 0, 0, spent_output=spent)]
+    cat.outputs = [changed]
+    ui.parser.token_review = TokenReview(nft_categories=[cat], current_category=cat)
+
+    first_warning = (views.PSBTMintingNFTWarningView if capability == 'minting'
+                     else views.PSBTModifiedNFTWarningView)
+    assert views.PSBTTokenView().category_start_view() is first_warning
+    destination = first_warning().run()
+    if capability == 'minting':
+        assert destination.View_cls is views.PSBTModifiedNFTWarningView
+        destination = destination.View_cls().run()
+    assert destination.View_cls is views.PSBTTokenDetailsView
+    warnings = [kwargs for name, kwargs in ui.calls if name == 'WarningScreen']
+    modification_warning = next(item for item in warnings
+                                if item['title'] == 'NFT Commitment Changed')
+    assert 'mutable or minting NFT' in modification_warning['text']
+
+
 @pytest.mark.parametrize('cls,cursor,is_ft', [
     (views.PSBTFungibleTokenAddressDetailsView, 'output_no', True),
     (views.PSBTNFTDetailsView, 'nft_detail_no', False),
@@ -305,8 +330,8 @@ def test_high_amount_warning_for_later_recipient(ui):
     ([('minting', 'm'), ('none', 'a')], [('minting', 'm'), ('none', 'b')], True),
     ([('minting', 'm'), ('none', 'a'), ('none', 'a')],
      [('minting', 'm'), ('none', 'a'), ('none', 'b')], True),
-    ([('minting', 'm')], [('none', 'm')], True),
-    ([('minting', 'm')], [('minting', 'changed')], True),
+    ([('minting', 'm')], [('none', 'm')], False),
+    ([('minting', 'm')], [('minting', 'changed')], False),
     ([('minting', 'm'), ('none', 'a')],
      [('none', 'new'), ('none', 'a'), ('minting', 'm')], False),
     ([], [('minting', 'genesis')], False),
