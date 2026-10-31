@@ -715,8 +715,97 @@ class PSBTParser:
         self.token_review: TokenReview = None
 
         # Build the transaction
-        self.build_transaction()
+        self.build_token_transaction()
         self.validate_no_token_burning()
+
+    # Build Token Transaction
+    def build_token_transaction(self):
+        ft_categories: Dict[str, Category] = {}
+        nft_categories: Dict[str, Category] = {}
+
+        # Candidate funding inputs for a genesis category (prev_index == 0)
+        in_genesis_catId: Dict[str, List[str]] = {}
+
+        # ---------------- INPUTS ----------------
+        for i, tx_in in enumerate(self.tx.inputs):
+            spent = resolve_spent_output(tx_in.prev_index, self.parsed["inputs"][i], prev_txid=tx_in.prev_txid)
+            tx_in.spent_output = spent
+
+            if spent is None:
+                raise ValueError(f"input {i} has no UTXO in the PSBT; cannot verify what is being spent")
+
+            self.total_input_amount += spent.value_satoshis
+
+            if tx_in.prev_index == 0:
+                category_id = tx_in.prev_txid[::-1].hex()
+                in_genesis_catId.setdefault(category_id, []).append(tx_in)
+
+            if spent.token:
+                category = spent.token.category_id
+                if spent.token.nft_data is not None:
+                    if category not in nft_categories:
+                        nft_categories.setdefault(
+                            category, 
+                            Category(category_id=category))
+                    nft_categories[category].add_input(tx_in)
+                if spent.token.ft_amount is not None:
+                    if category not in ft_categories:
+                        ft_categories.setdefault(
+                            category, 
+                            Category(category_id=category, is_ft=True))
+                    ft_categories[category].add_input(tx_in)
+
+
+        # ---------------- OUTPUTS ----------------
+        for tx_out in self.tx.outputs:
+
+            self.total_output_amount += tx_out.value_satoshis
+
+            if not tx_out.token:
+                continue
+
+            category = tx_out.token.category_id
+            
+            is_new_nft = (tx_out.token.nft_data is not None and category not in nft_categories)
+            is_new_ft  = (tx_out.token.ft_amount is not None and category not in ft_categories)
+
+            if is_new_nft and category not in in_genesis_catId:
+                raise ValueError(f"category {category} appears in outputs with no genesis input and no matching token input")
+            if is_new_ft and category not in in_genesis_catId:
+                raise ValueError(f"category {category} appears in outputs with no genesis input and no matching token input")
+
+            if tx_out.token.nft_data is not None:
+                if is_new_nft:
+                    if category not in nft_categories:
+                        nft_categories.setdefault(
+                            category, 
+                            Category(category_id=category, is_genesis=True))
+                    nft_categories[category].add_output(tx_out)
+                    if category in in_genesis_catId and category not in nft_categories:
+                        for input in in_genesis_catId[category]:
+                            nft_categories[category].add_input(input) 
+                else:
+                    nft_categories[category].add_output(tx_out)
+
+            # --- FT side ---
+            if tx_out.token.ft_amount is not None:
+                if is_new_ft:
+                    if category not in ft_categories:
+                        ft_categories.setdefault(
+                            category, 
+                            Category(category_id=category, is_ft=True, is_genesis=True))
+                    ft_categories[category].add_output(tx_out)
+                    if category in in_genesis_catId and category not in ft_categories:
+                        for input in in_genesis_catId[category]:
+                            ft_categories[category].add_input(input)
+                else:
+                    ft_categories[category].add_output(tx_out)
+
+        if ft_categories or nft_categories:
+            self.token_review = TokenReview(
+                ft_categories=list(ft_categories.values()),
+                nft_categories=list(nft_categories.values())
+            )
 
     def validate_no_token_burning(self):
         """Reject token loss before a parsed PSBT can enter review."""
@@ -808,92 +897,3 @@ class PSBTParser:
     def fee_amount(self) -> int:
         return self.total_input_amount - self.total_output_amount
 
-
-    # Build Transaction
-    def build_transaction(self):
-        ft_categories: Dict[str, Category] = {}
-        nft_categories: Dict[str, Category] = {}
-
-        # Candidate funding inputs for a genesis category (prev_index == 0)
-        in_genesis_catId: Dict[str, List[str]] = {}
-
-        # ---------------- INPUTS ----------------
-        for i, tx_in in enumerate(self.tx.inputs):
-            spent = resolve_spent_output(tx_in.prev_index, self.parsed["inputs"][i], prev_txid=tx_in.prev_txid)
-            tx_in.spent_output = spent
-
-            if spent is None:
-                raise ValueError(f"input {i} has no UTXO in the PSBT; cannot verify what is being spent")
-
-            self.total_input_amount += spent.value_satoshis
-
-            if tx_in.prev_index == 0:
-                category_id = tx_in.prev_txid[::-1].hex()
-                in_genesis_catId.setdefault(category_id, []).append(tx_in)
-
-            if spent.token:
-                category = spent.token.category_id
-                if spent.token.nft_data is not None:
-                    if category not in nft_categories:
-                        nft_categories.setdefault(
-                            category, 
-                            Category(category_id=category))
-                    nft_categories[category].add_input(tx_in)
-                if spent.token.ft_amount is not None:
-                    if category not in ft_categories:
-                        ft_categories.setdefault(
-                            category, 
-                            Category(category_id=category, is_ft=True))
-                    ft_categories[category].add_input(tx_in)
-
-
-        # ---------------- OUTPUTS ----------------
-        for tx_out in self.tx.outputs:
-
-            self.total_output_amount += tx_out.value_satoshis
-
-            if not tx_out.token:
-                continue
-
-            category = tx_out.token.category_id
-            
-            is_new_nft = (tx_out.token.nft_data is not None and category not in nft_categories)
-            is_new_ft  = (tx_out.token.ft_amount is not None and category not in ft_categories)
-
-            if is_new_nft and category not in in_genesis_catId:
-                raise ValueError(f"category {category} appears in outputs with no genesis input and no matching token input")
-            if is_new_ft and category not in in_genesis_catId:
-                raise ValueError(f"category {category} appears in outputs with no genesis input and no matching token input")
-
-            if tx_out.token.nft_data is not None:
-                if is_new_nft:
-                    if category not in nft_categories:
-                        nft_categories.setdefault(
-                            category, 
-                            Category(category_id=category, is_genesis=True))
-                    nft_categories[category].add_output(tx_out)
-                    if category in in_genesis_catId and category not in nft_categories:
-                        for input in in_genesis_catId[category]:
-                            nft_categories[category].add_input(input) 
-                else:
-                    nft_categories[category].add_output(tx_out)
-
-            # --- FT side ---
-            if tx_out.token.ft_amount is not None:
-                if is_new_ft:
-                    if category not in ft_categories:
-                        ft_categories.setdefault(
-                            category, 
-                            Category(category_id=category, is_ft=True, is_genesis=True))
-                    ft_categories[category].add_output(tx_out)
-                    if category in in_genesis_catId and category not in ft_categories:
-                        for input in in_genesis_catId[category]:
-                            ft_categories[category].add_input(input)
-                else:
-                    ft_categories[category].add_output(tx_out)
-
-        if ft_categories or nft_categories:
-            self.token_review = TokenReview(
-                ft_categories=list(ft_categories.values()),
-                nft_categories=list(nft_categories.values())
-            )
