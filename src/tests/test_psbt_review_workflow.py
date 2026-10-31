@@ -35,7 +35,7 @@ def test_payload_is_centered_in_inactive_component(monkeypatch):
     from unittest.mock import Mock
     from PIL import Image, ImageDraw
     from seedcash.gui.renderer import Renderer
-    from seedcash.gui.components import GUIConstants, RoundedTextArea
+    from seedcash.gui.components import RoundedTextArea
     from seedcash.gui.screens.psbt_screens import PSBTCardTextScreen
     from seedcash.gui.screens.screen import ButtonOption
     from seedcash.hardware.buttons import HardwareButtons
@@ -52,7 +52,8 @@ def test_payload_is_centered_in_inactive_component(monkeypatch):
     )
     content = next(c for c in screen.components if isinstance(c, RoundedTextArea))
     assert content.text == '1234'
-    assert content.fill_color == GUIConstants.INACTIVE_COLOR
+    # The app renders this card body transparently over the screen background.
+    assert content.fill_color == (0, 0, 0, 0)
     assert content.is_text_centered
     assert content.text_offset_y > 0
     assert content.screen_y + content.height < screen.canvas_height
@@ -70,7 +71,8 @@ def category(is_ft=True, genesis=False, amounts=(10, 20), burned=False, minting=
                       ft_amount=amount if is_ft else None,
                       nft_data=None if is_ft else Token.NFTData(capability, str(index)))
         return TxOutput(546, index=index, token=token, address=f'recipient-{index}')
-    result.outputs = [output(i, amount) for i, amount in enumerate(amounts)]
+    result.outputs = [output(i, amount, 'minting' if minting and not is_ft else 'none')
+                      for i, amount in enumerate(amounts)]
     if not genesis:
         spent = output(0, sum(amounts) + int(burned), 'minting' if minting else 'none')
         result.inputs = [TxInput(bytes(32), 1, 0, spent_output=spent)]
@@ -180,8 +182,8 @@ def test_nft_commitment_change_routes_through_warning(ui, capability):
     assert destination.View_cls is views.PSBTTokenDetailsView
     warnings = [kwargs for name, kwargs in ui.calls if name == 'WarningScreen']
     modification_warning = next(item for item in warnings
-                                if item['title'] == 'NFT Commitment Changed')
-    assert 'mutable or minting NFT' in modification_warning['text']
+                                if item['title'] == 'Modifying NFT(s)')
+    assert "NFT's commitment" in modification_warning['text']
 
 
 @pytest.mark.parametrize('cls,cursor,is_ft', [
@@ -325,12 +327,13 @@ def test_high_amount_warning_for_later_recipient(ui):
 
 @pytest.mark.parametrize('inputs,outputs,burned', [
     ([('none', 'a')], [], True),
-    ([('mutable', 'a')], [('none', 'b')], False),
+    ([('mutable', 'a')], [('none', 'b')], True),
     ([('none', 'a'), ('none', 'a')], [('none', 'a')], True),
     ([('minting', 'm'), ('none', 'a')], [('minting', 'm'), ('none', 'b')], True),
     ([('minting', 'm'), ('none', 'a'), ('none', 'a')],
      [('minting', 'm'), ('none', 'a'), ('none', 'b')], True),
-    ([('minting', 'm')], [('none', 'm')], False),
+    ([('minting', 'm')], [('none', 'm')], True),
+    ([('minting', 'm')], [('mutable', 'm')], True),
     ([('minting', 'm')], [('minting', 'changed')], False),
     ([('minting', 'm'), ('none', 'a')],
      [('none', 'new'), ('none', 'a'), ('minting', 'm')], False),
@@ -341,6 +344,7 @@ def test_high_amount_warning_for_later_recipient(ui):
     ([('mutable', 'a')], [('mutable', 'b'), ('none', 'extra')], True),
 ])
 def test_parser_rejects_nft_loss(inputs, outputs, burned):
+    """Exercise SeedCash's app policy for NFT continuity and capability changes."""
     from seedcash.models.psbt_parser import PSBTParser
     def output(nft):
         return TxOutput(546, token=Token(b'', b'', 'cat', nft_data=Token.NFTData(*nft)))
@@ -351,10 +355,10 @@ def test_parser_rejects_nft_loss(inputs, outputs, burned):
     if not inputs:
         cat.is_genesis = True
     if burned:
-        with pytest.raises(ValueError, match='(burns|creates)'):
-            parser.validate_no_token_burning()
+        with pytest.raises(ValueError, match='(burns|creates|changes non-fungible token capability)'):
+            parser.validate_token_tx()
     else:
-        parser.validate_no_token_burning()
+        parser.validate_token_tx()
 
 
 def test_ft_burn_is_rejected_before_nft_validation():
@@ -362,7 +366,7 @@ def test_ft_burn_is_rejected_before_nft_validation():
     parser = PSBTParser.__new__(PSBTParser)
     parser.token_review = TokenReview(ft_categories=[category(burned=True)], nft_categories=[None])
     with pytest.raises(ValueError, match='burns fungible'):
-        parser.validate_no_token_burning()
+        parser.validate_token_tx()
 
 
 @pytest.mark.parametrize('genesis,inputs,outputs', [
@@ -380,7 +384,7 @@ def test_ft_creation_is_rejected(genesis, inputs, outputs):
     parser = PSBTParser.__new__(PSBTParser)
     parser.token_review = TokenReview(ft_categories=[cat])
     with pytest.raises(ValueError, match='creates'):
-        parser.validate_no_token_burning()
+        parser.validate_token_tx()
 
 
 @pytest.mark.parametrize('fixture_id', ['M06', 'M07'])

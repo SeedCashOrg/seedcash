@@ -226,17 +226,6 @@ class Category:
             else:
                 if nft.capability in ("mutable", "minting"):
                     unmatched_mutable_inputs.append(nft)
-        # A capability downgrade can preserve the same NFT without changing its
-        # commitment; consume those outputs before identifying changed commitments.
-        for input_nft in unmatched_mutable_inputs[:]:
-            same_commitment = next(
-                (i for i, output_nft in enumerate(unmatched_outputs)
-                 if output_nft.commitment == input_nft.commitment),
-                None,
-            )
-            if same_commitment is not None:
-                unmatched_outputs.pop(same_commitment)
-                unmatched_mutable_inputs.remove(input_nft)
         return any(
             input_nft.commitment != output_nft.commitment
             for input_nft in unmatched_mutable_inputs
@@ -400,7 +389,7 @@ def parse_token_script(script: bytes) -> Optional[Token]:
                 nft_len, pos = read_token_varint(script, pos)
             except (IndexError, struct.error, ValueError):
                 return None
-            if nft_len == 0 or nft_len > 40:
+            if nft_len == 0 or nft_len > 128:
                 return None
             if len(script) < pos + nft_len:
                 return None
@@ -716,8 +705,7 @@ class PSBTParser:
 
         # Build the transaction
         self.build_token_transaction()
-        self.validate_no_token_burning()
-
+        self.validate_token_tx()
     # Build Token Transaction
     def build_token_transaction(self):
         ft_categories: Dict[str, Category] = {}
@@ -807,7 +795,7 @@ class PSBTParser:
                 nft_categories=list(nft_categories.values())
             )
 
-    def validate_no_token_burning(self):
+    def validate_token_tx(self):
         """Reject token loss before a parsed PSBT can enter review."""
         if self.token_review is None:
             return
@@ -836,20 +824,42 @@ class PSBTParser:
             if is_genesis_creation:
                 continue
 
+            # A transferred NFT must keep its capability. Mutable and minting
+            # capabilities permit commitment changes, but not capability changes.
+            remaining_outputs = list(output_nfts)
+            for nft in input_nfts:
+                same_capability = next(
+                    (i for i, out in enumerate(remaining_outputs)
+                     if out.capability == nft.capability),
+                    None,
+                )
+                if same_capability is not None:
+                    remaining_outputs.pop(same_capability)
+                    continue
+                if any(out.commitment == nft.commitment for out in remaining_outputs):
+                    raise ValueError("PSBT changes non-fungible token capability")
+
             unmatched_inputs = []
             for nft in input_nfts:
                 match = next((i for i, out in enumerate(output_nfts)
-                              if (out.capability, out.commitment) ==
-                              (nft.capability, nft.commitment)), None)
+                              if out.capability == nft.capability
+                              and (out.commitment == nft.commitment
+                                   or nft.capability in ("mutable", "minting"))), None)
                 if match is not None:
                     output_nfts.pop(match)
                 else:
                     unmatched_inputs.append(nft)
             for nft in unmatched_inputs:
-                if nft.capability in ("mutable", "minting") and output_nfts:
-                    # A capability may be downgraded while transferring the NFT;
-                    # commitment changes are also permitted for mutable/minting inputs.
-                    output_nfts.pop(0)
+                if nft.capability in ("mutable", "minting") and any(
+                    out.capability == nft.capability for out in output_nfts
+                ):
+                    # Mutable and minting NFTs may change commitment, but their
+                    # capability must be preserved.
+                    output_index = next(
+                        i for i, out in enumerate(output_nfts)
+                        if out.capability == nft.capability
+                    )
+                    output_nfts.pop(output_index)
                 else:
                     raise ValueError("PSBT burns non-fungible tokens")
             if not has_minting_input and output_nfts:
