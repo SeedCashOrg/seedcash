@@ -91,7 +91,7 @@ class TestAuditIntegration:
 
     class TestSC03OnParsedTx:
 
-        def test_lookalike_output_has_no_address(self):
+        def test_unrecognized_bch_locking_script_is_rejected_by_seedcash_policy(self):
             alice = bytes.fromhex('cbdd214121b18cac291e41175e5b9204b9df7457')
             attacker = bytes.fromhex('11' * 20)
             lookalike = b'v\xa9\x14' + alice + b'm' + b'v\xa9\x14' + attacker + b'\x88\xac'
@@ -299,8 +299,12 @@ class TestAuditSc01Sc05:
                            + parser_signing_security_kv(b'\x04', b'\x01')
                            + parser_signing_security_kv(b'\x05', b'\x01'))
             token_prefix = b'\xef' + bytes(32) + b'`' + bytes([commitment_size]) + bytes(commitment_size)
-            output_field = parser_signing_security_kv(b'6', token_prefix + parser_signing_security_P2PKH)
-            psbt = parser_signing_security_psbt(global_extra=globals_145, output_map=output_field)
+            output_field = parser_signing_security_kv(b'6', token_prefix)
+            psbt = parser_signing_security_psbt(
+                global_extra=globals_145,
+                output_map=output_field,
+                script=token_prefix + parser_signing_security_P2PKH,
+            )
             if commitment_size == 128:
                 assert parse_psbt(psbt)['output_count'] == 1
             else:
@@ -529,12 +533,32 @@ class TestParserSigningSecurity:
         assert signer._key_cache == {}
 
     @staticmethod
-    def test_conflicting_non_witness_and_witness_utxos_rejected():
+    @pytest.mark.parametrize('witness_value,witness_script', [
+        (901, parser_signing_security_P2PKH),
+        (900, parser_signing_security_P2PKH + b'\x51'),
+    ])
+    def test_conflicting_non_witness_and_witness_utxos_rejected(witness_value, witness_script):
         parent = parser_signing_security_tx_bytes()
         txid = double_sha256(parent)
-        witness = 901 .to_bytes(8, 'little') + bytes([len(parser_signing_security_P2PKH)]) + parser_signing_security_P2PKH
+        witness = (witness_value.to_bytes(8, 'little')
+                   + serialize_varint(len(witness_script)) + witness_script)
         with pytest.raises(ValueError, match='conflicting'):
             resolve_spent_output(0, [(b'\x00', parent), (b'\x01', witness)], txid)
+
+    @staticmethod
+    def test_matching_non_witness_and_witness_utxos_resolve_to_same_output():
+        parent = parser_signing_security_tx_bytes()
+        txid = double_sha256(parent)
+        witness = (900 .to_bytes(8, 'little')
+                   + serialize_varint(len(parser_signing_security_P2PKH))
+                   + parser_signing_security_P2PKH)
+
+        spent = resolve_spent_output(
+            0, [(b'\x00', parent), (b'\x01', witness)], txid
+        )
+
+        assert spent.value_satoshis == 900
+        assert spent.full_script == parser_signing_security_P2PKH
 
 class TestPsbtParserBoundaries:
 
@@ -642,6 +666,46 @@ def psbt_version_with_field(value):
     return b'psbt\xff' + _serialize_keypairs(pairs) + b'\x00' + raw[end:]
 
 
+def bch_p2pk_signing_psbt(public_key, paytaca_separator=False):
+    """Build a BCH v145 PSBT spending a matching synthetic P2PK output."""
+    parent_input = (
+        bytes(32) + (0xffffffff).to_bytes(4, 'little')
+        + b'\x01\x00' + (0xffffffff).to_bytes(4, 'little')
+    )
+    parent_script = bytes([len(public_key)]) + public_key + b'\xac'
+    parent_tx = (
+        b'\x02\x00\x00\x00' + b'\x01' + parent_input + b'\x01'
+        + (1000).to_bytes(8, 'little') + serialize_varint(len(parent_script))
+        + parent_script + bytes(4)
+    )
+    unsigned_tx = (
+        b'\x02\x00\x00\x00' + b'\x01' + double_sha256(parent_tx)
+        + bytes(4) + b'\x00' + b'\xff' * 4 + b'\x01'
+        + (900).to_bytes(8, 'little')
+        + serialize_varint(len(parser_signing_security_P2PKH))
+        + parser_signing_security_P2PKH + bytes(4)
+    )
+    global_pairs = [
+        (b'\x00', unsigned_tx),
+        (b'\xfb', (145).to_bytes(4, 'little')),
+        (b'\x04', b'\x01'),
+        (b'\x05', b'\x01'),
+    ]
+    derivation = bytes(4) + (0).to_bytes(4, 'little')
+    input_pairs = [
+        (b'\x00', parent_tx),
+        (b'\x03', (0x41).to_bytes(4, 'little')),
+        (b'\x06' + public_key, derivation),
+    ]
+    output_pairs = [(b'\x02' + public_key, derivation)]
+    return (
+        b'psbt\xff' + _serialize_keypairs(global_pairs) + b'\x00'
+        + _serialize_keypairs(input_pairs) + b'\x00'
+        + (b'\x00' if paytaca_separator else b'')
+        + _serialize_keypairs(output_pairs) + b'\x00'
+    )
+
+
 class TestPsbtVersionEncoding:
     @staticmethod
     @pytest.mark.parametrize('version', [b'', b'\x91', b'\x91\x00', b'\x91\x00\x00', b'\x91\x00\x00\x00\x00', b'\x00\x00\x00\x91', 2 .to_bytes(4, 'little'), 146 .to_bytes(4, 'little')])
@@ -743,20 +807,18 @@ class TestPaytaca145Framing:
     @staticmethod
     @pytest.mark.parametrize('paytaca_separator', [False, True])
     def test_signed_psbt_preserves_output_suffix(monkeypatch, paytaca_separator):
-        raw = psbt_version_with_field((145).to_bytes(4, 'little'))
-        boundary = parse_psbt(raw)['input_ends']
-        if paytaca_separator:
-            raw = raw[:boundary] + b'\x00' + raw[boundary:]
+        private_key = (1).to_bytes(32, 'big')
+        public = Bip44.private_to_public(private_key)
+        raw = bch_p2pk_signing_psbt(public, paytaca_separator)
         parser = PSBTParser(raw)
         original_outputs = list(parser.parsed['outputs'])
         original_suffix = raw[parser.parsed['input_ends']:]
         signer = BitcoinCashSigner.__new__(BitcoinCashSigner)
         signer.parser = parser
-        signer.private_key = (1).to_bytes(32, 'big')
+        signer.private_key = private_key
         signer.chain_code = bytes(32)
         signer._key_cache = {}
-        public = Bip44.private_to_public(signer.private_key)
-        # Isolate wallet derivation; exercise real signing and serialization.
+        # Pin derivation to the known test key; keep BCH UTXO ownership real.
         monkeypatch.setattr(signer, 'find_derivation_path', lambda pairs: [0])
         monkeypatch.setattr(signer, '_derive_path', lambda path: ((1).to_bytes(32, 'big'), public))
         signed = signer.signed_psbt()
