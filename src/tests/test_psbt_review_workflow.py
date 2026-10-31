@@ -335,6 +335,10 @@ def test_high_amount_warning_for_later_recipient(ui):
     ([('minting', 'm'), ('none', 'a')],
      [('none', 'new'), ('none', 'a'), ('minting', 'm')], False),
     ([], [('minting', 'genesis')], False),
+    ([('none', 'a')], [('none', 'a'), ('none', 'extra')], True),
+    ([('none', 'a')], [('minting', 'new')], True),
+    ([('immutable', 'a')], [('immutable', 'new')], True),
+    ([('mutable', 'a')], [('mutable', 'b'), ('none', 'extra')], True),
 ])
 def test_parser_rejects_nft_loss(inputs, outputs, burned):
     from seedcash.models.psbt_parser import PSBTParser
@@ -344,8 +348,10 @@ def test_parser_rejects_nft_loss(inputs, outputs, burned):
                    outputs=[output(nft) for nft in outputs])
     parser = PSBTParser.__new__(PSBTParser)
     parser.token_review = TokenReview(nft_categories=[cat])
+    if not inputs:
+        cat.is_genesis = True
     if burned:
-        with pytest.raises(ValueError, match='burns non-fungible'):
+        with pytest.raises(ValueError, match='(burns|creates)'):
             parser.validate_no_token_burning()
     else:
         parser.validate_no_token_burning()
@@ -356,6 +362,24 @@ def test_ft_burn_is_rejected_before_nft_validation():
     parser = PSBTParser.__new__(PSBTParser)
     parser.token_review = TokenReview(ft_categories=[category(burned=True)], nft_categories=[None])
     with pytest.raises(ValueError, match='burns fungible'):
+        parser.validate_no_token_burning()
+
+
+@pytest.mark.parametrize('genesis,inputs,outputs', [
+    (False, 10, 11),
+    (True, 0, 0x8000000000000000),
+])
+def test_ft_creation_is_rejected(genesis, inputs, outputs):
+    from seedcash.models.psbt_parser import PSBTParser
+    cat = Category('cat', is_ft=True, is_genesis=genesis)
+    def output(amount):
+        return TxOutput(546, token=Token(b'', b'', 'cat', ft_amount=amount))
+    if inputs:
+        cat.inputs = [TxInput(bytes(32), 1, 0, spent_output=output(inputs))]
+    cat.outputs = [output(outputs)]
+    parser = PSBTParser.__new__(PSBTParser)
+    parser.token_review = TokenReview(ft_categories=[cat])
+    with pytest.raises(ValueError, match='creates'):
         parser.validate_no_token_burning()
 
 

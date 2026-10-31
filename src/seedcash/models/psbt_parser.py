@@ -725,16 +725,28 @@ class PSBTParser:
         for category in self.token_review.ft_categories:
             input_amount = sum(item.spent_output.token.ft_amount for item in category.inputs)
             output_amount = sum(item.token.ft_amount for item in category.outputs)
-            if input_amount > output_amount:
+            if category.is_genesis:
+                if output_amount > 0x7FFFFFFFFFFFFFFF:
+                    raise ValueError("PSBT creates too many fungible tokens")
+            elif output_amount > input_amount:
+                raise ValueError("PSBT creates fungible tokens")
+            elif input_amount > output_amount:
                 raise ValueError("PSBT burns fungible tokens")
 
         for category in self.token_review.nft_categories:
-            # NFT categories contain only inputs/outputs with NFT data.
-            # Match exact transfers first. Mutable and minting inputs may account
-            # for an output with a different commitment; an unmatched immutable
-            # input is burned, even if another NFT exists in the outputs.
             output_nfts = [item.token.nft_data for item in category.outputs]
             input_nfts = [item.spent_output.token.nft_data for item in category.inputs]
+            has_minting_input = any(nft.capability == "minting" for nft in input_nfts)
+            is_genesis_creation = category.is_genesis and not input_nfts
+
+            if not has_minting_input and not is_genesis_creation and any(
+                nft.capability == "minting" for nft in output_nfts
+            ):
+                raise ValueError("PSBT creates minting NFT without minting authority")
+
+            if is_genesis_creation:
+                continue
+
             unmatched_inputs = []
             for nft in input_nfts:
                 match = next((i for i, out in enumerate(output_nfts)
@@ -751,6 +763,8 @@ class PSBTParser:
                     output_nfts.pop(0)
                 else:
                     raise ValueError("PSBT burns non-fungible tokens")
+            if not has_minting_input and output_nfts:
+                raise ValueError("PSBT creates non-fungible tokens")
 
     # BCH View
     @property
