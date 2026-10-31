@@ -120,7 +120,7 @@ class TestAuditIntegration:
             parser.tx = ParseTransactionResult(version=b'\x01\x00\x00\x00', inputs=[tx_input], outputs=[TxOutput(value_satoshis=900, index=0, full_script=token.script_pubkey, token=Token(prefix=b'', script_pubkey=token.script_pubkey, category_id=category_id, ft_amount=1))], locktime=b'\x00\x00\x00\x00')
             monkeypatch.setattr('seedcash.models.psbt_parser.resolve_spent_output',
                                 lambda prev_index, input_pairs, prev_txid=None: spent_output)
-            parser.build_transaction()
+            parser.build_token_transaction()
             categories = {cat.category_id: cat for cat in parser.token_review.ft_categories}
             assert categories[category_id].is_genesis
             assert categories[category_id].inputs == []
@@ -361,7 +361,7 @@ class TestParserSigningSecurity:
             Bip44.derive_child_key(bytes(32), bytes(32), index)
 
     @staticmethod
-    @pytest.mark.parametrize('suffix', [b'', b'\x80', b'\x00', b'@', b'#', b'`\x00', b'`)' + bytes(41), b'`\x02\x01', b'\x10\x00', b'\x10\xfd\x01\x00', b'\x10\xff' + (1 << 63).to_bytes(8, 'little')])
+    @pytest.mark.parametrize('suffix', [b'', b'\x80', b'\x00', b'@', b'#', b'`\x00', b'`\x81' + bytes(129), b'`\x02\x01', b'\x10\x00', b'\x10\xfd\x01\x00', b'\x10\xff' + (1 << 63).to_bytes(8, 'little')])
     def test_complete_invalid_token_prefix_rejected(suffix):
         try:
             token = parse_token_script(b'\xef' + bytes(32) + suffix)

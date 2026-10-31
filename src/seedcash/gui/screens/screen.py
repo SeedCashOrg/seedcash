@@ -183,7 +183,9 @@ class BaseScreen(BaseComponent):
     def get_threads(self) -> List[BaseThread]:
         threads = self.threads.copy()
         for component in self.components:
-            threads += component.threads
+            # Some screen elements (for example keyboard TextEntryDisplay) are
+            # renderable components but do not own background threads.
+            threads.extend(getattr(component, "threads", ()))
         return threads
 
     def display(self) -> Any:

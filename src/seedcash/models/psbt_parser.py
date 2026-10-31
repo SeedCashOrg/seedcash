@@ -769,10 +769,6 @@ class PSBTParser:
                         Category(category_id=category, is_genesis=True)
                     )
 
-                    if category in in_genesis_catId:
-                        for input in in_genesis_catId[category]:
-                            nft_categories[category].add_input(input)
-
                 nft_categories[category].add_output(tx_out)
 
             # --- FT side ---
@@ -782,10 +778,6 @@ class PSBTParser:
                         category,
                         Category(category_id=category, is_ft=True, is_genesis=True)
                     )
-
-                    if category in in_genesis_catId:
-                        for input in in_genesis_catId[category]:
-                            ft_categories[category].add_input(input)
 
                 ft_categories[category].add_output(tx_out)
 

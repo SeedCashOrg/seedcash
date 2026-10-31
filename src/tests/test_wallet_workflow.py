@@ -314,6 +314,8 @@ class TestSecretLifecycle:
         bits = '00101' + '1' * 123
         entry = SeedSlipEntryView.__new__(SeedSlipEntryView)
         (entry.controller, entry.num_words) = (controller, 20)
+        # Match __init__'s 20-word workflow without constructing the full View/UI.
+        entry.max_bits = 128
         entry.run_screen = Mock(return_value=bits)
         entry.run()
         original = storage.scheme
