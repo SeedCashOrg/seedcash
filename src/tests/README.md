@@ -41,3 +41,13 @@ malformed framing. Incoming UR frames are limited to 16 KiB and messages to
 2 MiB; fragment counts and retained mixed fragments are bounded. Tests cover
 cleanup after subprocess failure, timeout, missing output, and invalid images.
 PSBT version-encoding contracts belong to the transaction tests.
+
+## App token policy
+
+Token transaction validation also enforces SeedCash review policy. For NFTs,
+outputs must preserve each input NFT's capability (`none`, `mutable`, or
+`minting`). Mutable and minting NFTs may change commitment while retaining the
+same capability; changing capability is treated as an invalid PSBT by this app.
+These are application acceptance rules exercised in the PSBT review workflow
+tests, and are distinct from tests that check CashTokens wire parsing or
+consensus-level token prefix validity.

@@ -117,8 +117,14 @@ class View:
         Instantiates the provided Screen_cls and runs its interactive display.
         Returns the user's input upon completion.
         """
-        self.screen = Screen_cls(**kwargs)
-        return self.screen.display()
+        try:
+            self.screen = Screen_cls(**kwargs)
+            return self.screen.display()
+        finally:
+            self.screen = None
+            screensaver = getattr(self.controller, "screensaver", None)
+            if screensaver is not None:
+                screensaver.last_screen = None
 
     def run(self, **kwargs) -> "Destination":
         raise Exception("Must implement in the child class")
@@ -144,7 +150,7 @@ class Destination:
         else:
             out = self.View_cls.__name__
         if self.view_args:
-            out += f"({self.view_args})"
+            out += f"(<{len(self.view_args)} route args>)"
         else:
             out += "()"
         if self.clear_history:
@@ -165,8 +171,13 @@ class Destination:
         return self.view.run()
 
     def run(self):
-        self._instantiate_view()
-        return self._run_view()
+        try:
+            self._instantiate_view()
+            return self._run_view()
+        finally:
+            # The Controller keeps the Destination for navigation history; release
+            # the executed View instance so it does not retain screen or secret state.
+            self.view = None
 
     def __eq__(self, obj):
         """
