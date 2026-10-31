@@ -776,30 +776,30 @@ class PSBTParser:
 
             if tx_out.token.nft_data is not None:
                 if is_new_nft:
-                    if category not in nft_categories:
-                        nft_categories.setdefault(
-                            category, 
-                            Category(category_id=category, is_genesis=True))
-                    nft_categories[category].add_output(tx_out)
-                    if category in in_genesis_catId and category not in nft_categories:
+                    nft_categories.setdefault(
+                        category,
+                        Category(category_id=category, is_genesis=True)
+                    )
+
+                    if category in in_genesis_catId:
                         for input in in_genesis_catId[category]:
-                            nft_categories[category].add_input(input) 
-                else:
-                    nft_categories[category].add_output(tx_out)
+                            nft_categories[category].add_input(input)
+
+                nft_categories[category].add_output(tx_out)
 
             # --- FT side ---
             if tx_out.token.ft_amount is not None:
                 if is_new_ft:
-                    if category not in ft_categories:
-                        ft_categories.setdefault(
-                            category, 
-                            Category(category_id=category, is_ft=True, is_genesis=True))
-                    ft_categories[category].add_output(tx_out)
-                    if category in in_genesis_catId and category not in ft_categories:
+                    ft_categories.setdefault(
+                        category,
+                        Category(category_id=category, is_ft=True, is_genesis=True)
+                    )
+
+                    if category in in_genesis_catId:
                         for input in in_genesis_catId[category]:
                             ft_categories[category].add_input(input)
-                else:
-                    ft_categories[category].add_output(tx_out)
+
+                ft_categories[category].add_output(tx_out)
 
         if ft_categories or nft_categories:
             self.token_review = TokenReview(
