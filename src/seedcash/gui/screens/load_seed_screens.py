@@ -2,7 +2,6 @@ import logging
 import math
 
 from dataclasses import dataclass
-from gettext import gettext as _
 from PIL import Image, ImageDraw
 
 from seedcash.hardware.buttons import HardwareButtonsConstants
@@ -677,6 +676,7 @@ class SeedMnemonicEntryScreen(BaseTopNavScreen):
 
 @dataclass
 class SeedAddPassphraseScreen(BaseTopNavScreen):
+    MAX_PASSPHRASE_LENGTH = 128
     passphrase: str = ""
 
     # Only used by the screenshot generator
@@ -1094,15 +1094,16 @@ class SeedAddPassphraseScreen(BaseTopNavScreen):
                             cursor_position = len(self.passphrase)
 
                     elif ret_val == Keyboard.KEY_SPACE["code"]:
-                        if cursor_position == len(self.passphrase):
-                            self.passphrase += " "
-                        else:
-                            self.passphrase = (
-                                self.passphrase[:cursor_position]
-                                + " "
-                                + self.passphrase[cursor_position:]
-                            )
-                        cursor_position += 1
+                        if len(self.passphrase) < self.MAX_PASSPHRASE_LENGTH:
+                            if cursor_position == len(self.passphrase):
+                                self.passphrase += " "
+                            else:
+                                self.passphrase = (
+                                    self.passphrase[:cursor_position]
+                                    + " "
+                                    + self.passphrase[cursor_position:]
+                                )
+                            cursor_position += 1
 
                     # Update the text entry display and cursor
                     self.text_entry_display.render(self.passphrase, cursor_position)
@@ -1112,15 +1113,16 @@ class SeedAddPassphraseScreen(BaseTopNavScreen):
                     and ret_val not in Keyboard.ADDITIONAL_KEYS
                 ):
                     # User has locked in the current letter
-                    if cursor_position == len(self.passphrase):
-                        self.passphrase += ret_val
-                    else:
-                        self.passphrase = (
-                            self.passphrase[:cursor_position]
-                            + ret_val
-                            + self.passphrase[cursor_position:]
-                        )
-                    cursor_position += 1
+                    if len(self.passphrase) < self.MAX_PASSPHRASE_LENGTH:
+                        if cursor_position == len(self.passphrase):
+                            self.passphrase += ret_val
+                        else:
+                            self.passphrase = (
+                                self.passphrase[:cursor_position]
+                                + ret_val
+                                + self.passphrase[cursor_position:]
+                            )
+                        cursor_position += 1
 
                     # Update the text entry display and cursor
                     self.text_entry_display.render(self.passphrase, cursor_position)

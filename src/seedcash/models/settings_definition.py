@@ -71,28 +71,6 @@ class SettingsConstants:
 
         return detected_languages
 
-    @classmethod
-    def get_all_seed_protocols(cls) -> list[str]:
-        """
-        Returns a list of all available seed protocols.
-        """
-        protocols = [protocol[1] for protocol in cls.ALL_SEED_PROTOCOLS]
-        logger.info(f"Available seed protocols: {protocols}")
-        return protocols
-
-    @classmethod
-    def get_choose_words_options(cls, protocol: str) -> list[tuple[int, str]]:
-        """
-        Returns the available options for choosing the number of words based on the
-        selected seed protocol.
-        """
-        if protocol == cls.SEED_PROTOCOL__BIP39:
-            return [protocol[0] for protocol in cls.CHOOSE_BIP39_WORDS]
-        elif protocol == cls.SEED_PROTOCOL__SLIP39:
-            return [protocol[0] for protocol in cls.CHOOSE_SLIP39_WORDS]
-        else:
-            raise ValueError(f"Invalid seed protocol: {protocol}")
-
     CAMERA_ROTATION__0 = 0
     CAMERA_ROTATION__90 = 90
     CAMERA_ROTATION__180 = 180
@@ -112,29 +90,6 @@ class SettingsConstants:
         (QR_DENSITY_LOW, "Low"),
         (QR_DENSITY_MEDIUM, "Medium"),
         (QR_DENSITY_HIGH, "High"),
-    ]
-
-    # Seed protocols
-    SEED_PROTOCOL__BIP39 = "BIP39"
-    SEED_PROTOCOL__SLIP39 = "SLIP39"
-
-    ALL_SEED_PROTOCOLS = [
-        (SEED_PROTOCOL__BIP39, "BIP39"),
-        (SEED_PROTOCOL__SLIP39, "SLIP39"),
-    ]
-
-    # BIPP39 Choose Words
-    CHOOSE_BIP39_WORDS = [
-        (12, "12 Words"),
-        (15, "15 Words"),
-        (18, "18 Words"),
-        (21, "21 Words"),
-        (24, "24 Words"),
-    ]
-
-    CHOOSE_SLIP39_WORDS = [
-        (20, "20 Words"),
-        (33, "33 Words"),
     ]
 
     PERSISTENT_SETTINGS__SD_INSERTED__HELP_TEXT = "Store Settings on SD card"
@@ -158,8 +113,6 @@ class SettingsConstants:
 
     SETTING__CAMERA_ROTATION = "camera_rotation"
     SETTING_QR_DENSITY = "qr_density"
-    SETTING__SEED_PROTOCOL = "seed_protocol"
-    SETTING__CHOOSE_WORDS = "choose_words"
 
     SETTING__DEBUG = "debug"
 
@@ -358,19 +311,7 @@ class SettingsDefinition:
             selection_options=SettingsConstants.ALL_CAMERA_ROTATIONS,
             default_value=SettingsConstants.CAMERA_ROTATION__180,
         ),
-        # Seed Protocol Settings
-        SettingsEntry(
-            attr_name=SettingsConstants.SETTING__SEED_PROTOCOL,
-            type=SettingsConstants.TYPE__SELECT_1,
-            selection_options=SettingsConstants.ALL_SEED_PROTOCOLS,
-            default_value=SettingsConstants.SEED_PROTOCOL__BIP39,
-        ),
-        # Choose Words Settings
-        SettingsEntry(
-            attr_name=SettingsConstants.SETTING__CHOOSE_WORDS,
-            type=SettingsConstants.TYPE__SELECT_1,
-            default_value=SettingsConstants.CHOOSE_BIP39_WORDS,
-        ),
+        
         # QR Density Settings
         SettingsEntry(
             attr_name=SettingsConstants.SETTING_QR_DENSITY,

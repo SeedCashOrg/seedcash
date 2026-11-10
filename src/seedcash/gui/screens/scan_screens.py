@@ -1,7 +1,6 @@
 import time
 
 from dataclasses import dataclass
-from gettext import gettext as _
 from PIL import Image, ImageDraw
 
 from seedcash.gui import renderer
@@ -56,7 +55,7 @@ class ScanScreen(BaseScreen):
         super().__post_init__()
 
         # TODO: Arrange this with UI elements rather than text
-        self.instructions_text = "< " + _("back") + "  |  " + _(self.instructions_text)
+        self.instructions_text = "< " + "back" + "  |  " + self.instructions_text
 
         self.camera = Camera.get_instance()
         self.camera.start_video_stream_mode(
@@ -259,7 +258,7 @@ class ScanScreen(BaseScreen):
                             )
 
                             # TRANSLATOR_NOTE: Inserts the percentage value of the animated QR scan progress
-                            text = _("{}%").format(progress_percentage)
+                            text = "{}%".format(progress_percentage)
 
                             draw.text(
                                 xy=(

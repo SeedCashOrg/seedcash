@@ -1,5 +1,4 @@
 import logging
-from seedcash.models.settings_definition import SettingsConstants
 from seedcash.models.bip44 import Bip44
 from seedcash.gui.screens import (
     RET_CODE__BACK_BUTTON,
@@ -12,9 +11,7 @@ from seedcash.gui.screens.wallet_screens import (
     SeedFinalizeScreen,
     GenerateAddressScreen,
     AddressScreen,
-    WalletOptionsScreen,
-    TranscribeSeedQRWholeQRScreen,
-    TranscribeSeedQRZoomedInScreen,
+    WalletOptionsScreen
 )
 
 from seedcash.gui.screens.load_seed_screens import (
@@ -40,8 +37,6 @@ class WalletFinalizeView(View):
     def __init__(self):
         super().__init__()
 
-        # NTBC
-        
         self.wallet = self.controller.storage.wallet
         self.fingerprint = self.wallet.fingerprint
 
@@ -61,7 +56,7 @@ class WalletFinalizeView(View):
             return Destination(BackStackView)
         
         if button_data[selected_menu_num] == self.CONFIRM:
-            if self.controller.storage.wallet and not self.controller.storage.is_generate:
+            if self.controller.storage.wallet and not self.controller.storage._is_generate:
                 return Destination(WalletOptionsView, clear_history=True)
 
             self.controller.storage.discard_wallet()
@@ -166,7 +161,6 @@ class SeedReviewPassphraseView(View):
         elif button_data[selected_menu_num] == self.CONFIRM:
             self.controller.storage.create_wallet()
             return Destination(SeedReviewPassphraseExitDialogView)
-            
 
 class SeedReviewPassphraseExitDialogView(View):
     CONFIRM = ButtonOption("Confirm")
@@ -190,7 +184,7 @@ class SeedReviewPassphraseExitDialogView(View):
         )
 
         if button_data[selected_menu_num] == self.CONFIRM:
-            if self.controller.storage.wallet and not self.controller.storage.is_generate:
+            if self.controller.storage.wallet and not self.controller.storage._is_generate:
                 return Destination(WalletOptionsView, clear_history=True)
 
             self.controller.storage.discard_wallet()
@@ -243,9 +237,7 @@ class ViewSeedView(View):
     
     def __init__(self, index: int = 0):
         super().__init__()
-        self.is_slip = (SettingsConstants.SEED_PROTOCOL__SLIP39 == 
-                        self.controller.settings.get_instance().get_value(
-                            SettingsConstants.SETTING__SEED_PROTOCOL))
+        
         self.index = index
     def run(self):
         
@@ -271,12 +263,9 @@ class ViewSeedView(View):
                 return Destination(ViewSeedView, view_args={"index": 0}, skip_current_view=True)
 
 
-        if self.is_slip:
-            from seedcash.views.load_slip_views import Slip39SeedViewView
-            return Destination(Slip39SeedViewView, skip_current_view=True)
-        else:
-            from seedcash.views.load_seed_views import Bip39SeedViewView
-            return Destination(Bip39SeedViewView, skip_current_view=True)
+        
+        from seedcash.views.load_seed_views import Bip39SeedViewView
+        return Destination(Bip39SeedViewView, skip_current_view=True)
 
 class GenerateAddressView(View):
     def __init__(self):
@@ -402,43 +391,3 @@ class SeedDiscardView(View):
         elif button_data[selected_menu_num] == self.DISCARD:
             self.controller.discard_wallet()
             return Destination(MainMenuView, clear_history=True)
-
-class TranscribeSeedQRWholeQRView(View):
-    def __init__(self):
-        super().__init__()
-        self.is_screensaver_allowed = False
-    
-    def run(self):
-        ret = self.run_screen(
-            TranscribeSeedQRWholeQRScreen,
-            button_data=[ButtonOption("View Zoomed")],
-            qr_data=self.controller.storage.seed.get_encoded(),
-        )
-
-        if ret == RET_CODE__BACK_BUTTON:
-            return Destination(BackStackView)
-        elif ret == 0:
-            return Destination(TranscribeSeedQRZoomedInView)
-    
-class TranscribeSeedQRZoomedInView(View):
-    """
-    intial_zone_x, initial_zone_y: Used by the screenshot generator to shift the view
-    to a more interesting part of the QR code template.
-    """
-    def __init__(self, initial_zone_x: int = 0, initial_zone_y: int = 0):
-        super().__init__()
-        self.initial_zone_x = initial_zone_x
-        self.initial_zone_y = initial_zone_y
-        self.is_screensaver_allowed = False
-
-
-    def run(self):
-        self.run_screen(
-            TranscribeSeedQRZoomedInScreen,
-            qr_data=self.controller.storage.seed.get_encoded(),
-            num_modules=21,
-            initial_zone_x=self.initial_zone_x,
-            initial_zone_y=self.initial_zone_y,
-        )
-
-        return Destination(WalletOptionsView, clear_history=True)

@@ -5,7 +5,7 @@ child-module directory, or test helper package.
 
 | File | Coverage |
 | --- | --- |
-| `test_wallet_workflow.py` | BIP39 known answers and normalization, final-word generation, SLIP39 recovery/navigation, passphrase consistency, replacement key wiping, disposal, and redaction |
+| `test_wallet_workflow.py` | BIP39 known answers and normalization, final-word generation, passphrase consistency, replacement key wiping, disposal, and redaction |
 | `test_transactions.py` | PSBT fixtures and parsing boundaries, CashTokens, CashAddr, sighash restrictions, redeem-script validation, and independently constructed signing digests/signatures |
 | `test_qr_transport.py` | QR subprocess isolation and cleanup, UR framing/round trips and resource limits, fragment identity, strict CBOR, Bytewords corruption, CRC against Python's standard library, and PSBT receiving |
 

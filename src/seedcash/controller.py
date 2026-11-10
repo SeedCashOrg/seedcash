@@ -4,15 +4,13 @@ import time
 import traceback
 
 from seedcash.gui.toast import BaseToastOverlayManagerThread
-from seedcash.models.seed import Seed
 from seedcash.models.storage import SeedStorage
 from seedcash.models.settings import Settings
-from seedcash.models.settings_definition import SettingsConstants
 from seedcash.models.singleton import Singleton
 from seedcash.models.threads import BaseThread
-from seedcash.views.screensaver import ScreensaverScreen
 from seedcash.hardware.buttons import HardwareButtons
 from seedcash.views.view import Destination
+from seedcash.gui.screens.screen import ScreensaverScreen
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +59,6 @@ class BackgroundImportThread(BaseThread):
         # # Do costly initializations
         time_import("seedcash.models.bip44")
         time_import("seedcash.models.bip39")
-        time_import("seedcash.models.slip39")
         time_import("seedcash.models.wallet")
         time_import("seedcash.models.seed")
         time_import("seedcash.models.storage")
@@ -73,8 +70,6 @@ class BackgroundImportThread(BaseThread):
 
         time_import("seedcash.views.load_seed_views")
         time_import("seedcash.views.generate_seed_views")
-        time_import("seedcash.views.load_slip_views")
-        time_import("seedcash.views.generate_slip_views")
 
 
 class Controller(Singleton):
@@ -208,8 +203,7 @@ class Controller(Singleton):
         * initial_destination: The first View to run. If None, the MainMenuView is
         used. Only used by the test suite.
         """
-        from seedcash.views.view import MainMenuView, BackStackView
-        from seedcash.views.screensaver import OpeningSplashView
+        from seedcash.views.view import MainMenuView, BackStackView, OpeningSplashView
         from seedcash.gui.toast import RemoveSDCardToastManagerThread
 
         OpeningSplashView().run()
@@ -337,26 +331,6 @@ class Controller(Singleton):
     def is_screensaver_running(self):
         return self.screensaver is not None and self.screensaver.is_running
 
-    # switch seed protocols
-    def switch_seed_protocol(self, protocol: str) -> Destination:
-        """
-        Switches the seed protocol to the given protocol and returns a Destination to
-        the ProtocolMigrationWarningView if needed.
-        """
-        logger.info(f"Switching seed protocol to: {protocol}")
-        if protocol not in SettingsConstants.get_all_seed_protocols():
-            raise ValueError(f"Invalid seed protocol: {protocol}")
-
-        self.settings.set_value(SettingsConstants.SETTING__SEED_PROTOCOL, protocol)
-
-        self.ChooseWords = SettingsConstants.get_choose_words_options(protocol)
-        logger.info(f"Choose words options set to: {self.ChooseWords}")
-        # set the choose words
-        self.settings.set_value(
-            SettingsConstants.SETTING__CHOOSE_WORDS,
-            self.ChooseWords,
-        )
-
     def start_screensaver(self):
         # If a toast is running, tell it to give up the Renderer.lock; it will then
         # block until the screensaver is done, at which point the toast can re-acquire
@@ -370,7 +344,6 @@ class Controller(Singleton):
         logger.info("Controller: Starting screensaver")
         if not self.screensaver:
             # Do a lazy/late import and instantiation to reduce Controller initial startup time
-
             self.screensaver = ScreensaverScreen(HardwareButtons.get_instance())
 
         # Start the screensaver, but it will block until it can acquire the Renderer.lock.

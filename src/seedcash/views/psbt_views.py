@@ -18,6 +18,7 @@ from seedcash.views.view import (
 from seedcash.gui.screens.psbt_screens import PSBTNFTScreen, PSBTOverviewScreen
 from seedcash.views.wallet_views import WalletOptionsView
 
+
 class PSBTTokenView(View):
     """Shared category navigation for the separate token review screens."""
 
