@@ -5,7 +5,4 @@ class QRType:
     # PSBT types
     PSBT__UR2 = "psbt__ur2"
 
-    # Seed types
-    SEED__COMPACTSEEDQR = "seed__compactseedqr"
-
     INVALID = "invalid"

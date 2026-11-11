@@ -226,17 +226,6 @@ class Category:
             else:
                 if nft.capability in ("mutable", "minting"):
                     unmatched_mutable_inputs.append(nft)
-        # A capability downgrade can preserve the same NFT without changing its
-        # commitment; consume those outputs before identifying changed commitments.
-        for input_nft in unmatched_mutable_inputs[:]:
-            same_commitment = next(
-                (i for i, output_nft in enumerate(unmatched_outputs)
-                 if output_nft.commitment == input_nft.commitment),
-                None,
-            )
-            if same_commitment is not None:
-                unmatched_outputs.pop(same_commitment)
-                unmatched_mutable_inputs.remove(input_nft)
         return any(
             input_nft.commitment != output_nft.commitment
             for input_nft in unmatched_mutable_inputs
@@ -306,7 +295,7 @@ class TokenReview:
 
 def read_varint(buf: bytes, pos: int) -> Tuple[int, int]:
     """Read a Bitcoin-style varint (CompactSize uint) at ``pos``."""
-    if pos >= len(buf):
+    if pos < 0 or pos >= len(buf):
         raise ValueError("pos out of range")
     b = buf[pos]
     if b < 0xFD:
@@ -400,7 +389,7 @@ def parse_token_script(script: bytes) -> Optional[Token]:
                 nft_len, pos = read_token_varint(script, pos)
             except (IndexError, struct.error, ValueError):
                 return None
-            if nft_len == 0 or nft_len > 40:
+            if nft_len == 0 or nft_len > 128:
                 return None
             if len(script) < pos + nft_len:
                 return None
@@ -515,7 +504,8 @@ def parse_transaction(tx_bytes: bytes) -> ParseTransactionResult:
             raise ValueError("invalid token prefix")
         script_type, address = classify_script(token.script_pubkey if token else script, is_token_tx=bool(token))
         
-        if script_type == ScriptType.UNKNOWN and not script.startswith(b"\xef"):
+        if script_type == ScriptType.UNKNOWN:
+            # SeedCash review supports only script types with a safe review path.
             raise ValueError("unknown script type")
         
         outputs.append(TxOutput(
@@ -546,32 +536,40 @@ def resolve_spent_output(
         PSBT_IN_WITNESS_UTXO, with CashToken decoding applied.
         """
 
+        non_witness = witness = None
         for key, value in input_pairs:
-            if key[0] == 0x00:  # PSBT_IN_NON_WITNESS_UTXO
+            if key == b"\x00":
                 expected_txid = hashlib.sha256(hashlib.sha256(value).digest()).digest()
                 if prev_txid is not None and expected_txid != prev_txid:
                     raise ValueError("parent transaction hash mismatch")
                 prev_tx = parse_transaction(value)
-                if prev_index < len(prev_tx.outputs):
-                    return prev_tx.outputs[prev_index]   # TxOutput
-                return None
-            if key[0] == 0x01:  # PSBT_IN_WITNESS_UTXO
-                out_value = value[:8]
+                if prev_index >= len(prev_tx.outputs):
+                    raise ValueError("previous output index out of range")
+                non_witness = prev_tx.outputs[prev_index]
+            elif key == b"\x01":
+                if len(value) < 9:
+                    raise ValueError("truncated witness UTXO")
                 script_len, spos = read_varint(value, 8)
-                script = value[spos:spos + script_len]
+                if spos + script_len != len(value):
+                    raise ValueError("invalid witness UTXO script length")
+                script = value[spos:]
                 token = parse_token_script(script)
                 if script.startswith(b"\xef") and token is None:
                     raise ValueError("invalid token prefix")
                 script_type, address = classify_script(token.script_pubkey if token else script, is_token_tx=bool(token))
-                return TxOutput(
-                    value_satoshis=int.from_bytes(out_value, "little"),
+                witness = TxOutput(
+                    value_satoshis=int.from_bytes(value[:8], "little"),
                     index=prev_index,
                     script_type=script_type,
                     full_script=script,
                     token=token,
                     address=address,
                 )
-        return None
+        if (non_witness is not None and witness is not None
+                and (non_witness.value_satoshis != witness.value_satoshis
+                     or non_witness.full_script != witness.full_script)):
+            raise ValueError("conflicting witness and non-witness UTXOs")
+        return witness if witness is not None else non_witness
 
 def parse_keypairs(buf: bytes, pos: int) -> Tuple[List[Tuple[bytes, bytes]], int]:
     """Parse one PSBT key-value map, returning ``[(key, value), ...]``."""
@@ -640,6 +638,8 @@ def parse_psbt(buf) -> Dict[str, Any]:
         if not key:
             raise ValueError("empty PSBT key")
         if key[0] == 0x00:  # PSBT_GLOBAL_UNSIGNED_TX
+            if key != b"\x00":
+                raise ValueError("invalid unsigned transaction key")
             unsigned_tx = value
         elif key[0] == 0x04:  # PSBT_GLOBAL_INPUT_COUNT (v2)
             input_count, count_pos = read_varint(value, 0)
@@ -662,6 +662,16 @@ def parse_psbt(buf) -> Dict[str, Any]:
     if unsigned_tx is None:
         raise ValueError("No unsigned transaction found in PSBT")
 
+    unsigned = parse_transaction(unsigned_tx)
+    if any(txin.script_sig for txin in unsigned.inputs):
+        raise ValueError("unsigned transaction inputs must have empty scriptSig")
+    if psbt_version == 0:
+        if any(key[0] in (0x04, 0x05) for key, _ in global_pairs):
+            raise ValueError("PSBT v0 must not contain v2 input/output counts")
+        input_count, output_count = len(unsigned.inputs), len(unsigned.outputs)
+    elif input_count != len(unsigned.inputs) or output_count != len(unsigned.outputs):
+        raise ValueError("PSBT input/output counts do not match unsigned transaction")
+
     input_starts: int = 0
     input_ends: int = 0
     inputs = []
@@ -681,12 +691,25 @@ def parse_psbt(buf) -> Dict[str, Any]:
         pos += 1
 
     outputs = []
-    for _ in range(output_count):
+    for index in range(output_count):
         pairs, pos = parse_keypairs(buf, pos)
         reject_unknown_types(pairs, known_output_types, "output")
         for key, value in pairs:
-            if key == b"\x36" and parse_token_script(value) is None:
-                raise ValueError("invalid token prefix")
+            if psbt_version == 0 and key[0] in (0x03, 0x04):
+                raise ValueError("PSBT v0 output map contains v2-only metadata")
+            if key[0] in (0x03, 0x04) and len(key) != 1:
+                raise ValueError("unexpected key data in output metadata")
+            expected = unsigned.outputs[index]
+            if key == b"\x03" and (len(value) != 8 or int.from_bytes(value, "little") != expected.value_satoshis):
+                raise ValueError("PSBT output amount does not match unsigned transaction")
+            if key == b"\x04" and value != expected.script_pubkey:
+                raise ValueError("PSBT output script does not match unsigned transaction")
+            if key == b"\x36":
+                metadata_token = parse_token_script(value)
+                if metadata_token is None:
+                    raise ValueError("invalid token prefix")
+                if expected.token is None or metadata_token.prefix != expected.token.prefix:
+                    raise ValueError("PSBT output token metadata does not match unsigned transaction")
         outputs.append(pairs)
 
     if pos != len(buf):
@@ -702,101 +725,26 @@ def parse_psbt(buf) -> Dict[str, Any]:
         "output_count": output_count,
         "psbt_version": psbt_version,
         "unsigned_tx": unsigned_tx,
+        "tx": unsigned,
         "proprietary": proprietary,
     }
 
 class PSBTParser:
     def __init__(self,raw_psbt_bytes: bytearray):
-        self.psbt_bytes: bytearray = raw_psbt_bytes
-        self.parsed = parse_psbt(raw_psbt_bytes)
-        self.tx: ParseTransactionResult = parse_transaction(self.parsed["unsigned_tx"])
+        if not isinstance(raw_psbt_bytes, (bytes, bytearray, memoryview)):
+            raise TypeError("PSBT buffer must be bytes-like")
+        self.psbt_bytes: bytes = bytes(raw_psbt_bytes)
+        self.parsed = parse_psbt(self.psbt_bytes)
+        self.tx: ParseTransactionResult = self.parsed["tx"]
         self.total_input_amount: int = 0
         self.total_output_amount: int = 0
         self.token_review: TokenReview = None
 
         # Build the transaction
-        self.build_transaction()
-        self.validate_no_token_burning()
-
-    def validate_no_token_burning(self):
-        """Reject token loss before a parsed PSBT can enter review."""
-        if self.token_review is None:
-            return
-        for category in self.token_review.ft_categories:
-            input_amount = sum(item.spent_output.token.ft_amount for item in category.inputs)
-            output_amount = sum(item.token.ft_amount for item in category.outputs)
-            if input_amount > output_amount:
-                raise ValueError("PSBT burns fungible tokens")
-
-        for category in self.token_review.nft_categories:
-            # NFT categories contain only inputs/outputs with NFT data.
-            # Match exact transfers first. Mutable and minting inputs may account
-            # for an output with a different commitment; an unmatched immutable
-            # input is burned, even if another NFT exists in the outputs.
-            output_nfts = [item.token.nft_data for item in category.outputs]
-            input_nfts = [item.spent_output.token.nft_data for item in category.inputs]
-            unmatched_inputs = []
-            for nft in input_nfts:
-                match = next((i for i, out in enumerate(output_nfts)
-                              if (out.capability, out.commitment) ==
-                              (nft.capability, nft.commitment)), None)
-                if match is not None:
-                    output_nfts.pop(match)
-                else:
-                    unmatched_inputs.append(nft)
-            for nft in unmatched_inputs:
-                if nft.capability in ("mutable", "minting") and output_nfts:
-                    # A capability may be downgraded while transferring the NFT;
-                    # commitment changes are also permitted for mutable/minting inputs.
-                    output_nfts.pop(0)
-                else:
-                    raise ValueError("PSBT burns non-fungible tokens")
-
-    # BCH View
-    @property
-    def input_count(self) -> int:
-        return len(self.tx.inputs)
-
-    @property
-    def output_count(self) -> int:
-        return len(self.tx.outputs)
-
-    @property
-    def outputs(self) -> List[TxOutput]:
-        return [tx_out for tx_out in self.tx.outputs if tx_out.address]
-
-    @property
-    def has_op_return(self) -> bool:
-        return any(tx_out.script_type == ScriptType.OP_RETURN for tx_out in self.tx.outputs)
-    
-    @property
-    def op_return_outputs(self) -> List[TxOutput]:
-        return [tx_out for tx_out in self.tx.outputs if tx_out.script_type == ScriptType.OP_RETURN]
-
-    @property
-    def p2pk_outputs(self) -> List[TxOutput]:
-        return [tx_out for tx_out in self.tx.outputs if tx_out.script_type == ScriptType.P2PK]
-
-    @property
-    def has_p2pk(self) -> bool:
-        return any(tx_out.script_type == ScriptType.P2PK for tx_out in self.tx.outputs)
-    
-    # Math
-    @property
-    def input_amount(self) -> int:
-        return self.total_input_amount
-
-    @property
-    def output_amount(self) -> int:
-        return self.total_output_amount
-
-    @property
-    def fee_amount(self) -> int:
-        return self.total_input_amount - self.total_output_amount
-
-
-    # Build Transaction
-    def build_transaction(self):
+        self.build_token_transaction()
+        self.validate_token_tx()
+    # Build Token Transaction
+    def build_token_transaction(self):
         ft_categories: Dict[str, Category] = {}
         nft_categories: Dict[str, Category] = {}
 
@@ -805,7 +753,10 @@ class PSBTParser:
 
         # ---------------- INPUTS ----------------
         for i, tx_in in enumerate(self.tx.inputs):
-            spent = resolve_spent_output(tx_in.prev_index, self.parsed["inputs"][i], prev_txid=tx_in.prev_txid)
+            input_pairs = self.parsed["inputs"][i]
+            if any(key == b"\x01" for key, _ in input_pairs) and not any(key == b"\x00" for key, _ in input_pairs):
+                raise ValueError("witness-only inputs are not supported")
+            spent = resolve_spent_output(tx_in.prev_index, input_pairs, prev_txid=tx_in.prev_txid)
             tx_in.spent_output = spent
 
             if spent is None:
@@ -853,33 +804,138 @@ class PSBTParser:
 
             if tx_out.token.nft_data is not None:
                 if is_new_nft:
-                    if category not in nft_categories:
-                        nft_categories.setdefault(
-                            category, 
-                            Category(category_id=category, is_genesis=True))
-                    nft_categories[category].add_output(tx_out)
-                    if category in in_genesis_catId and category not in nft_categories:
-                        for input in in_genesis_catId[category]:
-                            nft_categories[category].add_input(input) 
-                else:
-                    nft_categories[category].add_output(tx_out)
+                    nft_categories.setdefault(
+                        category,
+                        Category(category_id=category, is_genesis=True)
+                    )
+
+                nft_categories[category].add_output(tx_out)
 
             # --- FT side ---
             if tx_out.token.ft_amount is not None:
                 if is_new_ft:
-                    if category not in ft_categories:
-                        ft_categories.setdefault(
-                            category, 
-                            Category(category_id=category, is_ft=True, is_genesis=True))
-                    ft_categories[category].add_output(tx_out)
-                    if category in in_genesis_catId and category not in ft_categories:
-                        for input in in_genesis_catId[category]:
-                            ft_categories[category].add_input(input)
-                else:
-                    ft_categories[category].add_output(tx_out)
+                    ft_categories.setdefault(
+                        category,
+                        Category(category_id=category, is_ft=True, is_genesis=True)
+                    )
+
+                ft_categories[category].add_output(tx_out)
 
         if ft_categories or nft_categories:
             self.token_review = TokenReview(
                 ft_categories=list(ft_categories.values()),
                 nft_categories=list(nft_categories.values())
             )
+
+    def validate_token_tx(self):
+        """Reject token loss before a parsed PSBT can enter review."""
+        if self.token_review is None:
+            return
+        for category in self.token_review.ft_categories:
+            input_amount = sum(item.spent_output.token.ft_amount for item in category.inputs)
+            output_amount = sum(item.token.ft_amount for item in category.outputs)
+            if category.is_genesis:
+                if output_amount > 0x7FFFFFFFFFFFFFFF:
+                    raise ValueError("PSBT creates too many fungible tokens")
+            elif output_amount > input_amount:
+                raise ValueError("PSBT creates fungible tokens")
+            elif input_amount > output_amount:
+                raise ValueError("PSBT burns fungible tokens")
+
+        for category in self.token_review.nft_categories:
+            output_nfts = [item.token.nft_data for item in category.outputs]
+            input_nfts = [item.spent_output.token.nft_data for item in category.inputs]
+            has_minting_input = any(nft.capability == "minting" for nft in input_nfts)
+            is_genesis_creation = category.is_genesis and not input_nfts
+
+            if not has_minting_input and not is_genesis_creation and any(
+                nft.capability == "minting" for nft in output_nfts
+            ):
+                raise ValueError("PSBT creates minting NFT without minting authority")
+
+            if is_genesis_creation:
+                continue
+
+            # A transferred NFT must keep its capability. Mutable and minting
+            # capabilities permit commitment changes, but not capability changes.
+            remaining_outputs = list(output_nfts)
+            for nft in input_nfts:
+                same_capability = next(
+                    (i for i, out in enumerate(remaining_outputs)
+                     if out.capability == nft.capability),
+                    None,
+                )
+                if same_capability is not None:
+                    remaining_outputs.pop(same_capability)
+                    continue
+                if any(out.commitment == nft.commitment for out in remaining_outputs):
+                    raise ValueError("PSBT changes non-fungible token capability")
+
+            unmatched_inputs = []
+            for nft in input_nfts:
+                match = next((i for i, out in enumerate(output_nfts)
+                              if out.capability == nft.capability
+                              and (out.commitment == nft.commitment
+                                   or nft.capability in ("mutable", "minting"))), None)
+                if match is not None:
+                    output_nfts.pop(match)
+                else:
+                    unmatched_inputs.append(nft)
+            for nft in unmatched_inputs:
+                if nft.capability in ("mutable", "minting") and any(
+                    out.capability == nft.capability for out in output_nfts
+                ):
+                    # Mutable and minting NFTs may change commitment, but their
+                    # capability must be preserved.
+                    output_index = next(
+                        i for i, out in enumerate(output_nfts)
+                        if out.capability == nft.capability
+                    )
+                    output_nfts.pop(output_index)
+                else:
+                    raise ValueError("PSBT burns non-fungible tokens")
+            if not has_minting_input and output_nfts:
+                raise ValueError("PSBT creates non-fungible tokens")
+
+    # BCH View
+    @property
+    def input_count(self) -> int:
+        return len(self.tx.inputs)
+
+    @property
+    def output_count(self) -> int:
+        return len(self.tx.outputs)
+
+    @property
+    def outputs(self) -> List[TxOutput]:
+        return [tx_out for tx_out in self.tx.outputs if tx_out.address]
+
+    @property
+    def has_op_return(self) -> bool:
+        return any(tx_out.script_type == ScriptType.OP_RETURN for tx_out in self.tx.outputs)
+    
+    @property
+    def op_return_outputs(self) -> List[TxOutput]:
+        return [tx_out for tx_out in self.tx.outputs if tx_out.script_type == ScriptType.OP_RETURN]
+
+    @property
+    def p2pk_outputs(self) -> List[TxOutput]:
+        return [tx_out for tx_out in self.tx.outputs if tx_out.script_type == ScriptType.P2PK]
+
+    @property
+    def has_p2pk(self) -> bool:
+        return any(tx_out.script_type == ScriptType.P2PK for tx_out in self.tx.outputs)
+    
+    # Math
+    @property
+    def input_amount(self) -> int:
+        return self.total_input_amount
+
+    @property
+    def output_amount(self) -> int:
+        return self.total_output_amount
+
+    @property
+    def fee_amount(self) -> int:
+        return self.total_input_amount - self.total_output_amount
+

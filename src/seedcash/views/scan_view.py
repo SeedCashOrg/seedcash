@@ -1,6 +1,5 @@
 from gettext import gettext as _
 from seedcash.gui.screens import RET_CODE__BACK_BUTTON
-from seedcash.models.settings_definition import SettingsConstants
 from seedcash.views.view import (
     BackStackView,
     ErrorView,
@@ -116,43 +115,9 @@ class ScanView(View):
         # Handle the results
         if self.decoder.is_complete:
             if not self.is_valid_qr_type:
-                # We recognized the QR type but it was not the type expected for the
-                # current flow.
-                # Report QR types in more human-readable text (e.g. QRType
-                # `seed__compactseedqr` as "seed: compactseedqr").
-                # TODO: cleanup l10n presentation
-                return Destination(
-                    ErrorView,
-                    view_args=dict(
-                        title="Error",
-                        status_headline=_("Wrong QR Type"),
-                        text=_(self.invalid_qr_type_message)
-                        + f""", received "{self.decoder.qr_type.replace("__", ": ").replace("_", " ")}\" format""",
-                        button_text="Back",
-                        next_destination=Destination(
-                            BackStackView, skip_current_view=True
-                        ),
-                    ),
-                )
+                return Destination(ScanInvalidQRTypeView)
 
-            if self.decoder.is_seed:
-                seed_mnemonic = self.decoder.get_seed_phrase()
-                
-                if not seed_mnemonic:
-                    # seed is not valid, Exit if not valid with message
-                    return Destination(NotYetImplementedView)
-                else:
-                    # Found a valid mnemonic seed! All new seeds should be considered
-                    #   pending (might set a passphrase, SeedXOR, etc) until finalized.
-                    from seedcash.models.seed import Seed
-                    from .wallet_views import WalletFinalizeView
-                    seed = Seed(mnemonic=seed_mnemonic)
-                    self.controller.storage.set_seed(seed)
-                    self.controller.switch_seed_protocol(SettingsConstants.SEED_PROTOCOL__BIP39)
-                    self.controller.storage.create_wallet()
-                    return Destination(WalletFinalizeView, skip_current_view=True)
-            
-            elif self.decoder.is_psbt:
+            if self.decoder.is_psbt:
                 from seedcash.views.psbt_views import LoadingPSBTView
                 self.controller.psbt_bytes = self.decoder.get_psbt()
                 return Destination(LoadingPSBTView, skip_current_view=True)
@@ -173,11 +138,3 @@ class ScanPSBTView(ScanView):
     @property
     def is_valid_qr_type(self):
         return self.decoder.is_psbt
-
-class ScanSeedQRView(ScanView):
-    instructions_text = "Scan SeedQR"
-    invalid_qr_type_message = "Expected a SeedQR"
-
-    @property
-    def is_valid_qr_type(self):
-        return self.decoder.is_seed

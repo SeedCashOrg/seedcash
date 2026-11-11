@@ -18,6 +18,8 @@ class CalculateFinalWord:
     coin_flips: str
 
 class Seed:
+    MAX_PASSPHRASE_LENGTH = 128
+
     def __init__(self, mnemonic: List[str] = None) -> None:
 
         if not mnemonic:
@@ -112,6 +114,10 @@ class Seed:
     def set_passphrase(self, passphrase: str):
         if not isinstance(passphrase, str):
             raise InvalidSeedException("Passphrase must be a string")
+        if len(passphrase) > self.MAX_PASSPHRASE_LENGTH:
+            raise InvalidSeedException(
+                f"Passphrase must be at most {self.MAX_PASSPHRASE_LENGTH} characters"
+            )
         self._passphrase = passphrase
 
     @property

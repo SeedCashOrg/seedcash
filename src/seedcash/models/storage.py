@@ -1,9 +1,6 @@
 from typing import List, Optional, Tuple
 from seedcash.models.wallet import Wallet
 from seedcash.models.seed import Seed, InvalidSeedException
-from seedcash.models.scheme import Scheme, SchemeParameters, InvalidSchemeException
-from seedcash.models.settings import Settings
-from seedcash.models.settings_definition import SettingsConstants
 
 import logging
 from seedcash.gui.components import load_txt
@@ -14,7 +11,6 @@ logger = logging.getLogger(__name__)
 class SeedStorage:
     def __init__(self) -> None:
         self._mnemonic: List[str] = None
-        self._scheme: Scheme = None
         self._seed: Seed = None
         self._calculate_last_word_fields: Tuple[str, str] = None
         self._is_generate: bool = False
@@ -22,18 +18,7 @@ class SeedStorage:
     @property
     def get_wordlist(self) -> List[str]:
         # getting world list from resource/bip39.txt
-        if (
-            Settings.get_instance().get_value(SettingsConstants.SETTING__SEED_PROTOCOL)
-            == "BIP39"
-        ):
-            list39 = load_txt("bip39.txt")
-        elif (
-            Settings.get_instance().get_value(SettingsConstants.SETTING__SEED_PROTOCOL)
-            == "SLIP39"
-        ):
-            list39 = load_txt("slip39.txt")
-
-        return list39
+        return load_txt("bip39.txt")
 
     # Mnemonic management
     @property
@@ -78,27 +63,10 @@ class SeedStorage:
 
     @property
     def passphrase(self) -> Optional[str]:
-        if (
-            Settings.get_instance().get_value(SettingsConstants.SETTING__SEED_PROTOCOL) == "BIP39"
-        ):
-            return self.seed.passphrase
-        elif (
-            Settings.get_instance().get_value(SettingsConstants.SETTING__SEED_PROTOCOL) == "SLIP39"
-        ):
-            
-            return self.scheme.passphrase.decode("utf-8")
-
-        return None
+        return self.seed.passphrase
 
     def set_passphrase(self, passphrase: str):
-        if (
-            Settings.get_instance().get_value(SettingsConstants.SETTING__SEED_PROTOCOL) == "BIP39"
-        ):
-            self.seed.set_passphrase(passphrase)
-        elif (
-            Settings.get_instance().get_value(SettingsConstants.SETTING__SEED_PROTOCOL) == "SLIP39"
-        ):
-            self.scheme.set_passphrase(passphrase)
+        self.seed.set_passphrase(passphrase)
 
     # Seed management
     @property
@@ -138,87 +106,18 @@ class SeedStorage:
             self._seed.discard_seed()
         self._seed = None
 
-    # Scheme management
-    @property
-    def scheme(self) -> Scheme:
-        if not self._scheme:
-            raise InvalidSchemeException("Scheme has not been initialized")
-        return self._scheme
-    
-    def set_scheme(self, scheme: Scheme):
-        if not isinstance(scheme, Scheme):
-            raise InvalidSchemeException("Provided scheme is not a valid Scheme instance")
-        self._scheme = scheme
-
-    def discard_scheme(self):
-        if self._scheme is not None:
-            self._scheme.discard_scheme()
-        self._scheme = None
-    
-    def set_scheme_params(self, bits: Optional[str] = None):
-        if bits is not None:
-            self.set_scheme(
-                Scheme(scheme_parameters=SchemeParameters(bits=bits))
-            )
-        else:
-            from seedcash.models.slip39 import Slip39 as sp
-            self.set_scheme(
-                Scheme(scheme_parameters=SchemeParameters(
-                    bits=sp.get_random_bits_for_slip(self.mnemonic_length)
-                    )
-                ))
-
-        logger.info(f"Scheme and Mnemonics generated with parameters")
-
-    def add_share_to_scheme(self):
-        
-        if self.is_generate:
-            logger.warning("Cannot add share to scheme after wallet generation.")
-            raise InvalidSchemeException("Cannot add share to scheme after wallet generation.")
-
-        if self._scheme is None:
-            self.set_scheme(Scheme())
-            
-        try:
-            self.scheme.add_share(self.mnemonic)
-            logger.info("Share added to the current scheme.")
-        except InvalidSchemeException as e:
-            logger.warning(f"Invalid SLIP39 share {e}")
-            raise InvalidSchemeException(f"Invalid mnemonic provided for scheme {e}")
-
     @property
     def wallet(self) -> Optional[Wallet]:
-        if (
-            Settings.get_instance().get_value(SettingsConstants.SETTING__SEED_PROTOCOL)
-            == "BIP39"
-        ):
-            return self.seed.wallet
-        elif (
-            Settings.get_instance().get_value(SettingsConstants.SETTING__SEED_PROTOCOL)
-            == "SLIP39"
-        ):
-            return self.scheme.wallet
+        return self.seed.wallet
 
     def create_wallet(self):
-        if (
-            Settings.get_instance().get_value(SettingsConstants.SETTING__SEED_PROTOCOL)
-            == "BIP39"
-        ):
-            self.seed.generate_wallet()
+        self.seed.generate_wallet()
 
-        elif (
-            Settings.get_instance().get_value(SettingsConstants.SETTING__SEED_PROTOCOL)
-            == "SLIP39"
-        ):
-            self.scheme.generate_wallet()
 
     def discard_wallet(self):
         # 1. Discard seed
         self.discard_seed()
-        # 2. Discard scheme
-        self.discard_scheme()
         self.discard_mnemonic()
-    
         # 3. Force a collection attempt
         import gc
         gc.collect()

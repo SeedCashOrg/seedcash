@@ -7,15 +7,10 @@ from unittest.mock import Mock
 import pytest
 from seedcash.models.seed import Seed
 from seedcash.models.seed import InvalidSeedException
-from seedcash.models.scheme import Scheme
-from seedcash.models.scheme import SchemeParameters
 from seedcash.models.settings import Settings
 from seedcash.models.storage import SeedStorage
 from seedcash.views.view import View
 from seedcash.views.generate_seed_views import ToolsCalcFinalWordCoinFlipsView
-from seedcash.views.generate_slip_views import ListOfSharesView
-from seedcash.views.generate_slip_views import ViewShareView
-from seedcash.views.load_slip_views import Slip39SeedViewView
 from seedcash.models.bip39 import Bip39
 from seedcash.models.wallet import Wallet
 from seedcash.views.view import Destination
@@ -78,14 +73,8 @@ class TestGenerationWorkflow:
         assert '1010101' not in repr(destination)
 
     @staticmethod
-    @pytest.mark.parametrize('protocol', ['BIP39', 'SLIP39'])
-    def test_replacement_wipes_old_key_after_success(protocol):
-        if protocol == 'BIP39':
-            owner = Seed(['abandon'] * 11 + ['about'])
-        else:
-            params = SchemeParameters(bits='10' * 64)
-            params.update_groups(0, (2, 3))
-            owner = Scheme(params)
+    def test_replacement_wipes_old_key_after_success():
+        owner = Seed(['abandon'] * 11 + ['about'])
         owner.generate_wallet()
         old = owner.wallet
         key = old.xpriv
@@ -96,32 +85,12 @@ class TestGenerationWorkflow:
         assert key == bytearray(len(key))
 
     @staticmethod
-    def test_sparse_group_and_share_selection_reads_correct_mnemonic(monkeypatch):
-        params = SchemeParameters(bits='10' * 64)
-        params.set_groups_length(2)
-        params.update_groups(0, (2, 3))
-        params.update_groups(1, (2, 3))
-        generated = Scheme(params)
-        generated.generate_wallet()
-        recovered = Scheme()
-        for share in generated.groups[1].shares:
-            if share.index in (1, 2):
-                recovered.add_share_to_group(share)
-        recovered.generate_wallet()
-        assert recovered.wallet.xpub == generated.wallet.xpub
-        controller = SimpleNamespace(storage=SimpleNamespace(scheme=recovered, _scheme=recovered))
-        monkeypatch.setattr(View, '__init__', lambda self: setattr(self, 'controller', controller))
-        groups = Slip39SeedViewView()
-        assert [b.button_label for b in groups.button_data] == ['Group 1']
-        groups.run_screen = Mock(return_value=0)
-        destination = groups.run()
-        shares = ListOfSharesView(**destination.view_args)
-        assert [b.button_label for b in shares.button_data] == ['Share 1', 'Share 2']
-        for (position, share_id) in enumerate((1, 2)):
-            shares.run_screen = Mock(return_value=position)
-            destination = shares.run()
-            view = ViewShareView(**destination.view_args)
-            assert view.words == recovered.get_mnemonics_share_of_group(share_index=share_id, group_index=1)
+    def test_passphrase_length_limit_counts_spaces():
+        seed = Seed(['abandon'] * 11 + ['about'])
+        seed.set_passphrase('x' * 127 + ' ')
+        assert len(seed.passphrase) == 128
+        with pytest.raises(InvalidSeedException, match='at most 128 characters'):
+            seed.set_passphrase('x' * 128 + ' ')
 
     @staticmethod
     @pytest.mark.parametrize('generated', [False, True])
@@ -134,7 +103,7 @@ class TestGenerationWorkflow:
         from seedcash.views.view import MainMenuView
         from seedcash.views.wallet_views import SeedFinalizeScreen
         from seedcash.gui.screens.load_seed_screens import SeedReviewPassphraseScreen
-        storage.is_generate = generated
+        storage._is_generate = generated
         words = ['abandon'] * 11 + ['about']
         storage.set_mnemonic(list(words))
         storage.convert_mnemonic_to_seed()
@@ -193,18 +162,6 @@ def secret_lifecycle_create_seed_wallet(storage):
     return storage.wallet
 
 class TestSecretLifecycle:
-
-    @staticmethod
-    @pytest.fixture(autouse=True)
-    def bip39_settings():
-        from seedcash.models.settings import Settings
-        from seedcash.models.settings_definition import SettingsConstants
-        settings = Settings.get_instance()
-        previous = settings.get_value(SettingsConstants.SETTING__SEED_PROTOCOL)
-        settings.set_value(SettingsConstants.SETTING__SEED_PROTOCOL, 'BIP39')
-        yield
-        settings.set_value(SettingsConstants.SETTING__SEED_PROTOCOL, previous)
-
     @staticmethod
     def test_bip39_nfkd_and_known_answer():
         expected = 'c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e53495531f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04'
@@ -214,7 +171,7 @@ class TestSecretLifecycle:
     @staticmethod
     def test_generated_wallet_assignment_and_passphrase_owner():
         storage = SeedStorage()
-        storage.is_generate = False
+        storage._is_generate = False
         storage.set_mnemonic(list(secret_lifecycle_WORDS))
         storage.convert_mnemonic_to_seed()
         storage.set_passphrase('secret-passphrase')
@@ -234,7 +191,7 @@ class TestSecretLifecycle:
     @staticmethod
     def test_discard_clears_shared_mnemonic_and_private_buffer():
         storage = SeedStorage()
-        storage.is_generate = False
+        storage._is_generate = False
         source = list(secret_lifecycle_WORDS)
         storage.set_mnemonic(source)
         storage.convert_mnemonic_to_seed()
@@ -244,7 +201,7 @@ class TestSecretLifecycle:
         storage.set_passphrase('sensitive')
         storage.discard_wallet()
         assert seed_words == [None] * 12
-        assert storage._seed is storage._scheme is None
+        assert storage._seed is None
         assert storage._mnemonic == [None] * 12
         storage.discard_seed()
         wallet = Wallet.__new__(Wallet)
@@ -260,11 +217,10 @@ class TestSecretLifecycle:
             Seed([secret] * 12)
         assert secret not in str(caught.value)
         storage = SeedStorage()
-        storage.is_generate = False
-        bits = '10' * 64
+        storage._is_generate = False
         with caplog.at_level('INFO'):
-            storage.set_scheme_params(bits)
-        assert bits not in caplog.text
+            storage.set_mnemonic_length(12)
+        assert secret not in caplog.text
 
     @staticmethod
     def test_destination_repr_and_executed_view_release():
@@ -306,23 +262,6 @@ class TestSecretLifecycle:
         assert view.controller.screensaver.last_screen is None
 
     @staticmethod
-    def test_custom_entropy_survives_scheme_selection(monkeypatch):
-        from seedcash.views.generate_slip_views import SeedSlipEntryView, SeedSlipSchemeView
-        storage = SeedStorage()
-        storage.set_mnemonic_length(20)
-        controller = SimpleNamespace(storage=storage)
-        bits = '00101' + '1' * 123
-        entry = SeedSlipEntryView.__new__(SeedSlipEntryView)
-        (entry.controller, entry.num_words) = (controller, 20)
-        entry.run_screen = Mock(return_value=bits)
-        entry.run()
-        original = storage.scheme
-        monkeypatch.setattr(View, '__init__', lambda self: setattr(self, 'controller', controller))
-        SeedSlipSchemeView()
-        assert storage.scheme is original
-        assert storage.scheme.scheme_parameters.bits_str == bits
-
-    @staticmethod
     def test_seed_derivation_failure_preserves_owner_and_previous_wallet(monkeypatch):
         seed = Seed(secret_lifecycle_WORDS)
         seed.generate_wallet()
@@ -341,7 +280,7 @@ class TestSecretLifecycle:
         from seedcash.controller import Controller
         controller = Controller.__new__(Controller)
         controller._storage = SeedStorage()
-        controller._storage.is_generate = False
+        controller._storage._is_generate = False
         controller.back_stack = [Destination(View, {'mnemonic': secret_lifecycle_WORDS})]
         controller.screensaver = SimpleNamespace(last_screen='secret-pixels')
         raw = bytearray(b'sensitive-transaction')
@@ -363,7 +302,7 @@ class TestSecretLifecycle:
         from seedcash.views.wallet_views import SeedAddPassphraseView, SeedAddPassphraseExitDialogView
         from seedcash.views.view import BackStackView
         storage = SeedStorage()
-        storage.is_generate = False
+        storage._is_generate = False
         words = Bip39.generate_random_seed(12) if generated else list(secret_lifecycle_WORDS)
         expected_words = list(words)
         storage.set_mnemonic(words)
@@ -417,18 +356,6 @@ class TestSecretLifecycle:
         assert next_destination.View_cls is MainMenuView
         assert next_destination.clear_history
 
-    @staticmethod
-    def test_compact_seed_qr_exception_log_is_redacted(monkeypatch, caplog):
-        from seedcash.models.decode_qr import SeedQrDecoder, DecodeQRStatus
-        secret = 'qr-secret-mnemonic-material'
-        monkeypatch.setattr(Bip39, 'mnemonic_from_bytes', Mock(side_effect=ValueError(secret)))
-        decoder = SeedQrDecoder()
-        with caplog.at_level('WARNING'):
-            assert decoder.add(b'\x01' * 16) == DecodeQRStatus.INVALID
-        assert secret not in caplog.text
-        assert not decoder.complete
-        assert decoder.get_seed_phrase() == []
-
 class TestSc08Discard:
 
     @staticmethod
@@ -442,7 +369,7 @@ class TestSc08Discard:
         seed = storage.seed
         (words, key) = (seed.mnemonic, storage.wallet.xpriv)
         storage.discard_wallet()
-        assert storage._seed is storage._scheme is None
+        assert storage._seed is None
         assert words == [None] * 12
         assert not seed.passphrase
         assert key == bytearray(len(key))

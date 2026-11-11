@@ -1,7 +1,6 @@
 import logging
 
 from dataclasses import dataclass
-from gettext import gettext as _
 
 
 from seedcash.hardware.buttons import HardwareButtonsConstants
@@ -393,7 +392,7 @@ class ToolsCalcFinalWordDoneScreen(ButtonListScreen):
             IconTextLine(
                 icon_name=None,  # No icon since we're using the actual image
                 # TRANSLATOR_NOTE: a label for the shortened Key-id of a BIP-32 master HD wallet
-                label_text=_("fingerprint"),
+                label_text="fingerprint",
                 value_text=self.fingerprint,
                 is_text_centered=True,
                 screen_y=fingerprint_y,

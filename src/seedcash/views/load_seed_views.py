@@ -1,4 +1,3 @@
-from seedcash.gui.screens import screen
 from seedcash.models.seed import InvalidSeedException
 from gettext import gettext as _
 from seedcash.gui.components import SeedCashIconsConstants
@@ -36,16 +35,12 @@ class SeedMnemonicEntryView(View):
         from seedcash.gui.screens.load_seed_screens import SeedMnemonicEntryScreen
         ret = self.run_screen(
             SeedMnemonicEntryScreen,
-            # TRANSLATOR_NOTE: Inserts the word number (e.g. "Seed Word #6")
-            title=_("Seed Word #{}").format(
-                self.cur_word_index + 1
-            ),  # Human-readable 1-indexing!
+            title=_("Seed Word #{}").format(self.cur_word_index + 1),  
             initial_letters=list(self.cur_word) if self.cur_word else ["a"],
             wordlist=self.controller.storage.get_wordlist,
         )
 
         if ret == RET_CODE__BACK_BUTTON:
-            # remove the cur_word
             self.controller.storage.update_mnemonic(None, self.cur_word_index)
 
             if (
@@ -179,7 +174,7 @@ class SeedMnemonicDiscardView(View):
 
 class Bip39SeedViewView(View):
     CONFIRM = ButtonOption("Confirm")
-    EXPORT_QR = ButtonOption("Export SeedQR")
+    
     def __init__(self):
         super().__init__()
 
@@ -193,42 +188,18 @@ class Bip39SeedViewView(View):
             seed_words=self.controller.storage.seed.mnemonic,
         )
 
-        if len(self.controller.storage.seed.mnemonic) == 12:
-            button_data=[self.EXPORT_QR, self.CONFIRM]
-        else:
-            button_data=[self.CONFIRM]
 
         from seedcash.gui.screens.wallet_screens import SeedFinalizeScreen
         ret = self.run_screen(
             SeedFinalizeScreen,
             fingerprint=self.controller.storage.wallet.fingerprint,
-            selected_button=1 if len(button_data) == 2 else 0,
-            button_data=button_data,
+            button_data=[self.CONFIRM],
         )
 
         if ret == RET_CODE__BACK_BUTTON:
             from seedcash.views.wallet_views import ViewSeedView
             return Destination(ViewSeedView, view_args={"index": 1}, skip_current_view=True)
 
-        if button_data[ret] == self.CONFIRM:
-            from seedcash.views.wallet_views import WalletOptionsView
-            return Destination(WalletOptionsView, clear_history=True)
         
-        elif button_data[ret] == self.EXPORT_QR:
-            return Destination(PassphraseNotIncludedWarningView)
-
-class PassphraseNotIncludedWarningView(View):
-
-    def run(self):
-        result = self.run_screen(
-            screen.WarningScreen,
-            title="",
-            status_headline=_("Passphrase NOT included."),
-            text=_("SeedQR contains only the mnemonic phrase.")
-        )
-
-        if result == RET_CODE__BACK_BUTTON:
-            return Destination(BackStackView)
-
-        from seedcash.views.wallet_views import TranscribeSeedQRWholeQRView
-        return Destination(TranscribeSeedQRWholeQRView)
+        from seedcash.views.wallet_views import WalletOptionsView
+        return Destination(WalletOptionsView, clear_history=True)

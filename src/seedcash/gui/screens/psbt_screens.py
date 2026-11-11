@@ -1,7 +1,6 @@
 import time
 
 from dataclasses import dataclass
-from gettext import gettext as _
 from gettext import ngettext
 from PIL import Image, ImageDraw, ImageFilter
 
@@ -46,7 +45,7 @@ class PSBTOverviewScreen(SeedCashButtonListWithNav):
     def __post_init__(self):
 
         # Customize defaults
-        self.title = _("Review PSBT")
+        self.title = "Review PSBT"
         self.is_bottom_list = True
         self.is_button_text_centered = True
         self.selected_color = self.category.icon_color if self.category else GUIConstants.ACCENT_COLOR
@@ -126,18 +125,18 @@ class PSBTOverviewScreen(SeedCashButtonListWithNav):
         inputs_column = []
 
         if self.input_count == 0:
-            inputs_column.append(_("Genesis"))
+            inputs_column.append("Genesis")
         elif self.input_count == 1:
-            inputs_column.append(_("1 input"))
+            inputs_column.append("1 input")
         elif self.input_count > 5:
-            inputs_column.append(_("input 1"))
-            inputs_column.append(_("input 2"))
-            inputs_column.append(_("[ ... ]"))
-            inputs_column.append(_("input {}").format(self.input_count - 1))
-            inputs_column.append(_("input {}").format(self.input_count))
+            inputs_column.append("input 1")
+            inputs_column.append("input 2")
+            inputs_column.append("[ ... ]")
+            inputs_column.append("input {}").format(self.input_count - 1)
+            inputs_column.append("input {}").format(self.input_count)
         else:
             for i in range(0, self.input_count):
-                inputs_column.append(_("input {}").format(i + 1))
+                inputs_column.append("input {}").format(i + 1)
 
         max_inputs_text_width = 0
         for input in inputs_column:
@@ -158,9 +157,9 @@ class PSBTOverviewScreen(SeedCashButtonListWithNav):
 
             def truncate_destination_addr(addr):
                 addr = display_destination_addr(addr)
-                if len(addr) <= truncate_at + len(_("...")):
+                if len(addr) <= truncate_at + len("..."):
                     return addr
-                return addr[:truncate_at] + _("...")
+                return addr[:truncate_at] + "..."
 
             destination_column = []
 
@@ -168,17 +167,16 @@ class PSBTOverviewScreen(SeedCashButtonListWithNav):
                 for addr in self.destination_addresses:
                     destination_column.append(truncate_destination_addr(addr))
             else:
-                destination_column.append(_("recipient 1"))
-                destination_column.append(_("[ ... ]"))
-                destination_column.append(
-                    _("recipient {}").format(len(self.destination_addresses))
-                )
+                destination_column.append("recipient 1")
+                destination_column.append("[ ... ]")
+                destination_column.append("recipient {}").format(len(self.destination_addresses))
+    
             
             if self.fee_amount > 0:
-                destination_column.append(_("fee"))
+                destination_column.append("fee")
 
             if self.has_op_return:
-                destination_column.append(_("OP_RETURN"))
+                destination_column.append("OP_RETURN")
 
             max_destination_text_width = 0
             for destination in destination_column:
@@ -523,7 +521,7 @@ class PSBTNFTScreen(SeedCashButtonListWithNav):
 
     def __post_init__(self):
         # Customize defaults
-        self.title = _("Review PSBT")
+        self.title = "Review PSBT"
         self.is_bottom_list = True
         self.is_button_text_centered = True
         super().__post_init__()
@@ -587,10 +585,10 @@ class PSBTNFTDetailsScreen(SeedCashButtonListWithNav):
     nft_commitment: str = None
 
     def __post_init__(self):
-        self.title = _("Review PSBT")
+        self.title = "Review PSBT"
         self.is_bottom_list = True
         self.is_button_text_centered = True
-        self.button_data = [ButtonOption(_("Next"))]
+        self.button_data = [ButtonOption("Next")]
         self.commitment_scroll_y = 0
         self.commitment_max_scroll_y = 0
         self.commitment_scroll_step = 1
@@ -654,7 +652,7 @@ class PSBTNFTDetailsScreen(SeedCashButtonListWithNav):
         y = 2 * GUIConstants.COMPONENT_PADDING
         for component, after in (
             (plain(f"NFT #{self.output_num}", GUIConstants.TOP_NAV_TITLE_FONT_SIZE), gap),
-            (plain(_("Type"), GUIConstants.BODY_FONT_SIZE - 4), gap // 2),
+            (plain("Type", GUIConstants.BODY_FONT_SIZE - 4), gap // 2),
         ):
             component.screen_x = inset
             component.screen_y = y
@@ -682,7 +680,7 @@ class PSBTNFTDetailsScreen(SeedCashButtonListWithNav):
         self.commitment_max_scroll_y = 0
         self.commitment_field = None
         if commitment:
-            label = plain(_("Commitment"), GUIConstants.BODY_FONT_SIZE - 4)
+            label = plain("Commitment", GUIConstants.BODY_FONT_SIZE - 4)
             label.screen_x = inset
             label.screen_y = y
             label.render()
@@ -806,7 +804,7 @@ class PSBTNFTAddressScreen(SeedCashButtonListWithNav):
     index: int = None
 
     def __post_init__(self):
-        self.title = _("Will Send")
+        self.title = "Will Send"
         self.is_bottom_list = True
         self.is_button_text_centered = True
         super().__post_init__()
@@ -858,7 +856,7 @@ class PSBTMathScreen(SeedCashButtonListWithNav):
 
     def __post_init__(self):
         # Customize defaults
-        self.title = _("PSBT Math")
+        self.title = "PSBT Math"
         self.is_button_text_centered = True
         self.button_data = [ButtonOption("Review Recipients")]
         self.is_bottom_list = True
@@ -929,7 +927,7 @@ class PSBTMathScreen(SeedCashButtonListWithNav):
         info_texts = [
             ngettext("input", "inputs", self.input_count) if self.input_count > 0 else "",
             ngettext("output", "outputs", self.output_count) if self.output_count > 0 else "",
-            _("fee")
+            "fee"
         ]
         max_info_width = 0
         for info in info_texts:
@@ -997,7 +995,7 @@ class PSBTMathScreen(SeedCashButtonListWithNav):
         render_amount(
             cur_y,
             f" {self.fee_amount}",
-            info_text=_("fee"),
+            info_text="fee",
         )
 
         # Resize to target and sharpen final image
@@ -1113,7 +1111,7 @@ class PSBTCardTextScreen(SeedCashButtonListWithNav):
 class PSBTFinalizeScreen(SeedCashButtonListWithNav):
     def __post_init__(self):
         # Customize defaults
-        self.title = _("Sign PSBT")
+        self.title = "Sign PSBT"
         self.is_bottom_list = True
         self.is_button_text_centered = True
         super().__post_init__()
@@ -1129,7 +1127,7 @@ class PSBTFinalizeScreen(SeedCashButtonListWithNav):
 
         self.components.append(
             TextArea(
-                text=_("Click to sign PSBT"),
+                text="Click to sign PSBT",
                 screen_y=icon.screen_y
                 + icon.height
                 + 2 * GUIConstants.COMPONENT_PADDING,

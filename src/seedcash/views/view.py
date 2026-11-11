@@ -11,13 +11,12 @@ from seedcash.gui.screens.screen import (
     ButtonOption,
     WarningScreen,
     ErrorScreen,
+    OpeningSplashScreen
 )
 from seedcash.models.settings import Settings
 
+
 import logging
-
-from seedcash.models.settings_definition import SettingsConstants
-
 logger = logging.getLogger(__name__)
 
 
@@ -117,8 +116,14 @@ class View:
         Instantiates the provided Screen_cls and runs its interactive display.
         Returns the user's input upon completion.
         """
-        self.screen = Screen_cls(**kwargs)
-        return self.screen.display()
+        try:
+            self.screen = Screen_cls(**kwargs)
+            return self.screen.display()
+        finally:
+            self.screen = None
+            screensaver = getattr(self.controller, "screensaver", None)
+            if screensaver is not None:
+                screensaver.last_screen = None
 
     def run(self, **kwargs) -> "Destination":
         raise Exception("Must implement in the child class")
@@ -144,7 +149,7 @@ class Destination:
         else:
             out = self.View_cls.__name__
         if self.view_args:
-            out += f"({self.view_args})"
+            out += f"(<{len(self.view_args)} route args>)"
         else:
             out += "()"
         if self.clear_history:
@@ -165,8 +170,13 @@ class Destination:
         return self.view.run()
 
     def run(self):
-        self._instantiate_view()
-        return self._run_view()
+        try:
+            self._instantiate_view()
+            return self._run_view()
+        finally:
+            # The Controller keeps the Destination for navigation history; release
+            # the executed View instance so it does not retain screen or secret state.
+            self.view = None
 
     def __eq__(self, obj):
         """
@@ -188,8 +198,16 @@ class Destination:
 #
 #########################################################################################
 
+@dataclass
+class OpeningSplashView(View):
+    is_screenshot_renderer: bool = False
 
-# First Main Menu View
+    def run(self):
+        self.run_screen(
+            OpeningSplashScreen,
+            is_screenshot_renderer=self.is_screenshot_renderer,
+        )
+
 class MainMenuView(View):
     LOAD_SEED = ButtonOption("Load seed", SeedCashIconsConstants.LOAD_SEED)
     GENERATE_SEED = ButtonOption("Generate seed", SeedCashIconsConstants.GENERATE_SEED)
@@ -211,167 +229,52 @@ class MainMenuView(View):
         )
 
         button_data.append("Power Off")
+        self.controller.storage.set_mnemonic_length(12)
 
         if button_data[selected_menu_num] == self.LOAD_SEED:
-            self.controller.storage.is_generate = False
-            return Destination(LoadSeedView)
+            self.controller.storage._is_generate = False
+            from seedcash.views.load_seed_views import SeedMnemonicEntryView
+            return Destination(SeedMnemonicEntryView)
 
         elif button_data[selected_menu_num] == self.GENERATE_SEED:
-            self.controller.storage.is_generate = True
+            self.controller.storage._is_generate = True
             return Destination(GenerateSeedView)
 
         elif button_data[selected_menu_num] == self.SETTINGS:
             from seedcash.views.setting_views import SettingOptionsView
-
             return Destination(SettingOptionsView)
+
+        elif button_data[selected_menu_num] == self.SEED_STORAGE:
+            return Destination(NotYetImplementedView, view_args={"text": "Seed Storage is still on our to-do list!"})
 
         elif button_data[selected_menu_num] == "Power Off":
             return Destination(PowerOffView)
 
-class LoadSeedView(View):
-    BIP39 = ButtonOption("BIP39")
-    SLIP39 = ButtonOption("SLIP39")
-    SEEDCASHCARD = ButtonOption("SeedCash Card")
-    SEEDQR = ButtonOption("SeedQR")
-
-    def run(self):
-        from seedcash.gui.screens.screen import SeedCashButtonListWithNav
-
-        button_data = [
-            self.BIP39,
-            self.SLIP39,
-            self.SEEDCASHCARD,
-            self.SEEDQR,
-        ]
-        selected_menu_num = self.run_screen(
-            SeedCashButtonListWithNav,
-            title="Backup Protocol",
-            button_data=button_data,
-        )
-
-        if selected_menu_num == RET_CODE__BACK_BUTTON:
-            return Destination(MainMenuView)
-
-        if button_data[selected_menu_num] == self.BIP39:
-            self.controller.switch_seed_protocol(SettingsConstants.SEED_PROTOCOL__BIP39)
-            return Destination(SeedCashChooseWordsView)
-
-        elif button_data[selected_menu_num] == self.SLIP39:
-            self.controller.switch_seed_protocol(SettingsConstants.SEED_PROTOCOL__SLIP39)
-            return Destination(SeedCashChooseWordsView, view_args={"is_random_seed": False, "is_slip39": True})
-
-        elif button_data[selected_menu_num] == self.SEEDQR:
-            from seedcash.views.scan_view import ScanSeedQRView
-            return Destination(ScanSeedQRView)
-
 class GenerateSeedView(View):
-    BIP39 = ButtonOption("BIP39")
-    SLIP39 = ButtonOption("SLIP39")
+    RANDOM = ButtonOption("Random Seed")
+    CALCULATE_LAST_WORD = ButtonOption("Calculate Last Word")
 
     def run(self):
         from seedcash.gui.screens.screen import SeedCashButtonListWithNav
 
         button_data = [
-            self.BIP39,
-            self.SLIP39,
+            self.RANDOM,
+            self.CALCULATE_LAST_WORD,
         ]
         selected_menu_num = self.run_screen(
             SeedCashButtonListWithNav,
-            title="Backup Protocol",
             button_data=button_data,
         )
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(MainMenuView)
 
-        if button_data[selected_menu_num] == self.BIP39:
-            self.controller.switch_seed_protocol(SettingsConstants.SEED_PROTOCOL__BIP39)
-            from seedcash.views.generate_seed_views import SeedCashGenerateSeedView
-            return Destination(SeedCashGenerateSeedView)
+        if button_data[selected_menu_num] == self.RANDOM:
+            return Destination(NotYetImplementedView)
 
-        elif button_data[selected_menu_num] == self.SLIP39:
-            self.controller.switch_seed_protocol(SettingsConstants.SEED_PROTOCOL__SLIP39)
-            from seedcash.views.generate_seed_views import SeedCashGenerateSeedView
-            return Destination(SeedCashGenerateSeedView)
-
-# First Load Seed View
-class SeedCashChooseWordsView(View):
-    def __init__(self, is_random_seed: bool = False, is_calc_final_word: bool = False, is_slip39: bool = False):
-        super().__init__()
-
-        self.buttons_values = self.controller.settings.get_instance().get_value(
-            SettingsConstants.SETTING__CHOOSE_WORDS
-        )
-
-        self.buttons_data = [
-            ButtonOption(f"{num} Words") for num in self.buttons_values
-        ]
-        self.is_slip39 = is_slip39
-        self.is_random_seed = is_random_seed
-        self.is_calc_final_word = is_calc_final_word
-
-    def run(self):
-        from seedcash.gui.screens.screen import SeedCashButtonListWithNav
-
-        selected_menu_num = self.run_screen(
-            SeedCashButtonListWithNav,
-            button_data=self.buttons_data,
-        )
-
-        if selected_menu_num == RET_CODE__BACK_BUTTON:
-            return Destination(BackStackView)
-
-        selected_menu_num = int(self.buttons_values[selected_menu_num])
-        self.controller.storage.set_mnemonic_length(selected_menu_num)
-
-        if self.is_slip39:
-            if self.is_random_seed:
-                from seedcash.views.generate_slip_views import SeedSlipSchemeView
-                self.controller.storage.set_scheme_params()
-                return Destination(SeedSlipSchemeView)
-
-            elif self.is_calc_final_word:
-                from seedcash.views.generate_slip_views import SeedSlipEntryView
-                return Destination(SeedSlipEntryView)
-
-            else:
-                # If the user wants to enter a SLIP39 seed, we set the mnemonic length.
-                from seedcash.views.load_slip_views import SeedSlipMnemonicEntryView
-
-                return Destination(
-                    SeedSlipMnemonicEntryView,
-                    view_args={
-                        "cur_word_index": 0,
-                    },
-                )
-        else:
-            if self.is_random_seed:
-                # If the user wants a random seed, we generate it here.
-                
-                from seedcash.models.bip39 import Bip39
-                try:
-                    self.controller.storage.set_mnemonic(
-                        Bip39.generate_random_seed(
-                            num_words=self.controller.storage.mnemonic_length
-                            )
-                        )
-                except Exception as e:
-                    logger.error(f"Error generating random seed: {e}")
-                
-                from seedcash.views.generate_seed_views import ShowWordsView
-                return Destination(ShowWordsView)
-
-            else:
-                from seedcash.views.load_seed_views import SeedMnemonicEntryView
-
-                return Destination(
-                    SeedMnemonicEntryView,
-                    view_args={
-                        "cur_word_index": 0,
-                        "is_calc_final_word": self.is_calc_final_word,
-                    },
-                )
-
+        elif button_data[selected_menu_num] == self.CALCULATE_LAST_WORD:
+            from seedcash.views.load_seed_views import SeedMnemonicEntryView
+            return Destination(SeedMnemonicEntryView, view_args={"is_calc_final_word": True})
 
 class PowerOffView(View):
     def __init__(self):
@@ -385,6 +288,24 @@ class PowerOffView(View):
         if ret == RET_CODE__BACK_BUTTON:
             return Destination(MainMenuView, clear_history=True)
 
+@dataclass
+class AvailableInPlusView(View):
+    """
+    Temporary View to use during dev.
+    """
+
+    text: str = "This feature is only available in SeedCash Plus!"
+
+    def run(self):
+        self.run_screen(
+            WarningScreen,
+            title=_("SeedCash Plus"),
+            status_headline=_("Available in SeedCash Plus"),
+            text=self.text,
+            button_data=[ButtonOption("Back to Main Menu")],
+        )
+
+        return Destination(MainMenuView)
 
 @dataclass
 class NotYetImplementedView(View):
@@ -404,7 +325,6 @@ class NotYetImplementedView(View):
         )
 
         return Destination(MainMenuView)
-
 
 @dataclass
 class ErrorView(View):
@@ -431,7 +351,6 @@ class ErrorView(View):
             if self.next_destination
             else Destination(MainMenuView, clear_history=True)
         )
-
 
 @dataclass
 class UnhandledExceptionView(View):
