@@ -7,7 +7,7 @@ from seedcash.models.psbt_parser import (
     PSBTParser,
     ParseTransactionResult,
     parse_psbt,
-    parse_transaction,
+    ScriptType,
 )
 from seedcash.models.bip44 import Bip44
 
@@ -339,8 +339,14 @@ class BitcoinCashSigner:
             raise BCHSignerExpectation("msg_hash must be 32 bytes")
         if len(public_key) != 33:
             raise BCHSignerExpectation("public_key must be compressed (33 bytes)")
+        try:
+            expected_public = Bip44.private_to_public(private_key)
+        except (ValueError, AssertionError) as exc:
+            raise BCHSignerExpectation("invalid compressed public key") from exc
+        if public_key != expected_public:
+            raise BCHSignerExpectation("public key does not match private key")
 
-        k = ecdsa.rfc6979.generate_k(order, d, hashlib.sha256, msg_hash, extra_entropy=b"Schnorr+SHA256 ")
+        k = ecdsa.rfc6979.generate_k(order, d, hashlib.sha256, msg_hash, extra_entropy=b"Schnorr+SHA256  ")
         G = ecdsa.SECP256k1.generator
         R = k * G
 
@@ -366,9 +372,6 @@ class BitcoinCashSigner:
             if key[0] == PSBT_IN_BIP32_DERIVATION:
                 fp, path = parse_bip32_derivation_value(value)
                 
-                if fp == self.master_fingerprint:
-                    return path
-                
                 try:
                     pubkey_in_key = key[1:]
                     _, derived_pub = self._derive_path(path)
@@ -386,7 +389,7 @@ class BitcoinCashSigner:
         if reparsed["unsigned_tx"] != self.parser.parsed["unsigned_tx"]:
             raise BCHSignerExpectation("signed PSBT changed the unsigned transaction under review")
 
-        reviewed_tx = parse_transaction(reparsed["unsigned_tx"])
+        reviewed_tx = reparsed["tx"]
         if len(reviewed_tx.outputs) != len(self.parser.tx.outputs):
             raise BCHSignerExpectation("signed PSBT output count differs from the reviewed transaction")
         for reviewed_output, reparsed_output in zip(self.parser.tx.outputs, reviewed_tx.outputs):
@@ -404,7 +407,12 @@ class BitcoinCashSigner:
     # ------------------------------------------------------------------
     def signed_psbt(self) -> bytearray:
         """Sign the PSBT with the wallet's private keys."""
-        
+        try:
+            return self._signed_psbt()
+        finally:
+            self.clear()
+
+    def _signed_psbt(self) -> bytearray:
         if self.parser.tx is None:
             raise BCHSignerExpectation("No unsigned transaction in PSBT")
     
@@ -447,6 +455,17 @@ class BitcoinCashSigner:
                     if pub not in embedded_pubkeys:
                         raise BCHSignerExpectation("derived public key is not part of the multisignature redeem script")
                     break
+
+            spent = tx_input.spent_output
+            if script_code is None:
+                if spent.script_type == ScriptType.P2PKH:
+                    if Bip44.hash160(pub) != spent.script_pubkey[3:23]:
+                        raise BCHSignerExpectation("derived key does not control this input")
+                elif spent.script_type == ScriptType.P2PK:
+                    if spent.script_pubkey[1:-1] != pub:
+                        raise BCHSignerExpectation("derived key does not control this input")
+                else:
+                    raise BCHSignerExpectation("unsupported input script for signing")
 
             sighash = self.create_sighash(self.parser.tx, idx, hash_type, script_code=script_code)
             sig = self._sign_schnorr(priv, sighash, pub) + bytes([hash_type & 0xFF])
@@ -495,5 +514,3 @@ class BitcoinCashSigner:
         except BCHSignerExpectation as e:
             logger.error(f"Signed PSBT validation failed: {e}")
             raise
-        finally:
-            self.clear()
